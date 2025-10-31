@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Version: e9f67b4
+# Last-Modified: 2025-10-31T03:54:55Z
+# Source: https://get.pipeops.dev/k8-join-worker.sh
+
 # PipeOps Kubernetes join worker stub
 # Usage:
 #   export K3S_URL=...
@@ -23,4 +27,3 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fL --retry 3 -o "$tmp/join-worker.sh" "$URL"
 chmod +x "$tmp/join-worker.sh"
 exec bash "$tmp/join-worker.sh" "$@"
-
