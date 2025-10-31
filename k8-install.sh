@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Version: 955c47e
+# Last-Modified: 2025-10-31T03:54:04Z
+# Source: https://get.pipeops.dev/k8-install.sh
+
 # PipeOps Kubernetes installer stub
 # Usage:
 #   curl -fsSL https://get.pipeops.dev/k8-install.sh | bash
@@ -21,4 +25,3 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fL --retry 3 -o "$tmp/install.sh" "$URL"
 chmod +x "$tmp/install.sh"
 exec bash "$tmp/install.sh" "$@"
-

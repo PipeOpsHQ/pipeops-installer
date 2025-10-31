@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Version: 955c47e
+# Last-Modified: 2025-10-31T03:54:04Z
+# Source: https://get.pipeops.dev/k8-agent.sh
+
 # PipeOps Kubernetes Agent installer
 # Customize via env vars/flags:
 #   VERSION          - Tag like v1.2.3; default latest
