@@ -1,0 +1,13 @@
+# Placeholder manifest for the PipeOps Kubernetes agent.
+#
+# Replace this file with a pinned manifest for your desired version.
+# Example (if published at GitHub Releases):
+#   https://github.com/pipeopshq/pipeops-k8-agent/releases/download/vX.Y.Z/k8-agent.yaml
+#
+# Until replaced, applying this file will only create the namespace.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pipeops-system
+

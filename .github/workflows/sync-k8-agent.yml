@@ -1,0 +1,72 @@
+name: Sync K8s Agent Manifest
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Agent release tag (optional; defaults to latest)"
+        required: false
+        type: string
+  schedule:
+    - cron: "0 */6 * * *"  # every 6 hours
+  repository_dispatch:
+    types: [k8_agent_released]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-k8-agent
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine tag
+        id: tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const inputTag = core.getInput('tag');
+            let tag = inputTag && inputTag.trim().length ? inputTag.trim() : '';
+            if (context.eventName === 'repository_dispatch' && context.payload?.client_payload?.tag) {
+              tag = context.payload.client_payload.tag;
+            }
+            if (!tag) {
+              // fetch latest release tag from pipeopshq/pipeops-k8-agent
+              const latest = await github.rest.repos.getLatestRelease({
+                owner: 'pipeopshq',
+                repo: 'pipeops-k8-agent',
+              });
+              tag = latest.data.tag_name;
+            }
+            core.setOutput('tag', tag);
+
+      - name: Fetch manifest
+        id: fetch
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.tag.outputs.tag }}'
+          echo "Using tag: ${TAG}"
+          URL="https://github.com/pipeopshq/pipeops-k8-agent/releases/download/${TAG}/k8-agent.yaml"
+          mkdir -p k8-agent
+          curl -fL --retry 3 -o "k8-agent/k8-agent-${TAG}.yaml" "$URL"
+          cp "k8-agent/k8-agent-${TAG}.yaml" k8-agent.yaml
+
+      - name: Commit changes
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add k8-agent.yaml k8-agent/
+            git commit -m "chore(agent): bump k8-agent.yaml to ${{ steps.tag.outputs.tag }}"
+            git push
+          else
+            echo "No changes to commit"
+          fi
+
