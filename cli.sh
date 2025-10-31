@@ -16,6 +16,8 @@ umask 022
 
 GH_REPO=${GH_REPO:-pipeopshq/pipeops-cli}
 BINARY_NAME=${BINARY_NAME:-pipeops}
+# Prefix used in release asset filenames (defaults to the real naming: pipeops-cli_...)
+ASSET_PREFIX=${ASSET_PREFIX:-pipeops-cli}
 VERSION=${VERSION:-latest}
 ASSET_EXT=${ASSET_EXT:-tar.gz}
 VERIFY=${VERIFY:-auto}
@@ -37,7 +39,7 @@ detect_os() {
 
 detect_arch() {
   case "$(uname -m)" in
-    x86_64|amd64) echo amd64 ;;
+    x86_64|amd64) echo x86_64 ;;
     arm64|aarch64) echo arm64 ;;
     armv7l|armv7) echo armv7 ;;
     i386|i686) echo 386 ;;
@@ -66,13 +68,17 @@ main() {
     base_url="https://github.com/${GH_REPO}/releases/download/${VERSION}"
   fi
 
+  # Resolve asset filename; try common naming patterns until one downloads
   if [ -n "${ASSET_FILE:-}" ]; then
     asset_file="${ASSET_FILE}"
   else
-    asset_file="${BINARY_NAME}_${os}_${arch}.${ASSET_EXT}"
+    # Preferred naming used by PipeOps releases
+    candidates=(
+      "${ASSET_PREFIX}_${os}_${arch}.${ASSET_EXT}"
+      "${BINARY_NAME}_${os}_${arch}.${ASSET_EXT}"
+      "${BINARY_NAME}-cli_${os}_${arch}.${ASSET_EXT}"
+    )
   fi
-
-  download_url="${base_url}/${asset_file}"
 
   # Install prefix
   if [ -n "${PREFIX:-}" ]; then
@@ -97,9 +103,28 @@ main() {
   trap 'rm -rf "${tdir}"' EXIT
 
   local file_path
-  file_path="${tdir}/${asset_file##*/}"
   mkdir -p "$tdir"
-  curl -fL --retry 3 --connect-timeout 10 -o "$file_path" "$download_url" || die "Download failed: $download_url"
+  if [ -n "${asset_file:-}" ]; then
+    # Explicit asset path provided
+    download_url="${base_url}/${asset_file}"
+    file_path="${tdir}/${asset_file##*/}"
+    info "Downloading ${download_url}"
+    curl -fL --retry 3 --connect-timeout 10 -o "$file_path" "$download_url" || die "Download failed: $download_url"
+  else
+    # Try candidates until one succeeds
+    local ok=0; local tried="";
+    for af in "${candidates[@]}"; do
+      download_url="${base_url}/${af}"
+      file_path="${tdir}/${af##*/}"
+      info "Downloading ${download_url}"
+      if curl -fL --retry 3 --connect-timeout 10 -o "$file_path" "$download_url" ; then
+        asset_file="$af"; ok=1; break
+      else
+        tried+="\n  - ${download_url}"
+      fi
+    done
+    [ "$ok" = 1 ] || die "Download failed. Tried:${tried}"
+  fi
 
   try_verify_checksum "$file_path" "$download_url" "$base_url" "$asset_file"
 
