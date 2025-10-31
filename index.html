@@ -11,11 +11,13 @@
       pre{background:#0b1220;color:#e7edf3;padding:1rem;border-radius:8px;overflow:auto}
       code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
       .card{background:#fff;border:1px solid #e8eef6;border-radius:12px;padding:1rem;margin:1rem 0}
+      .meta{color:#65748b;font-size:.9rem;margin:.25rem 0 1rem}
     </style>
   </head>
   <body>
     <main>
       <h1>PipeOps Installer</h1>
+      <div class="meta">Version: f50e2d1 • Last updated: <span id="lastmod">loading…</span></div>
       <div class="card">
         <h2>CLI</h2>
         <p>Install the latest CLI:</p>
@@ -48,5 +50,16 @@
 
       <p style="color:#65748b">Served via GitHub Pages. Update scripts/manifests in this repo to publish changes.</p>
     </main>
+    <script>
+      (function(){
+        try{
+          var d = new Date(document.lastModified);
+          var utc = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().replace('T',' ').replace('Z',' UTC');
+          document.getElementById('lastmod').textContent = utc;
+        }catch(e){
+          document.getElementById('lastmod').textContent = 'unknown';
+        }
+      })();
+    </script>
   </body>
   </html>
