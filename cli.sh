@@ -97,10 +97,9 @@ main() {
   fi
 
   info "OS=${os} ARCH=${arch}"
-  info "Downloading ${download_url}"
 
   tdir=$(tmpdir)
-  trap 'rm -rf "${tdir}"' EXIT
+  trap 'rm -rf "${tdir:-}"' EXIT
 
   local file_path
   mkdir -p "$tdir"
@@ -203,7 +202,7 @@ try_verify_checksum() {
 
   for url in "${sum_urls[@]}"; do
     sum_file="${tmp_dir}/checksums"
-    if curl -fsSL -o "$sum_file" "$url" ; then
+    if curl -fsL -o "$sum_file" "$url" 2>/dev/null ; then
       if do_verify_with_file "$file_path" "$sum_file" "$basename" ; then
         info "Checksum verified using $(basename "$url")"
         ok=1
