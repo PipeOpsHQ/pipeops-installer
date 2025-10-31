@@ -11,8 +11,11 @@ Adjust variables in the scripts to match your release assets and binary naming.
 ## Files
 
 - `cli.sh` — Installs the PipeOps CLI from GitHub Releases (auto-detects OS/arch).
+- `k8-install.sh` — Delegates to the upstream cluster/agent installer (`scripts/install.sh`).
+- `agent.sh` — Alias wrapper to `k8-install.sh` for convenience.
 - `k8-agent.sh` — Applies the PipeOps Kubernetes agent manifest (defaults to your GitHub Releases; can be pinned).
 - `k8-agent.yaml` — Placeholder manifest (replace with your pinned agent manifest if you want a stable path).
+- `k8-join-worker.sh` — Delegates to the upstream worker join script (`scripts/join-worker.sh`).
 - `CNAME` — Custom domain for GitHub Pages (`get.pipeops.dev`).
 - `.nojekyll` — Disables Jekyll processing so files serve as raw assets.
 - `index.html` — Minimal landing page with usage examples.
@@ -100,6 +103,50 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
 
   ```sh
   kubectl apply -f https://get.pipeops.dev/k8-agent.yaml
+  ```
+
+- Bootstrap a cluster and install the agent (served from this installer domain; delegates to upstream installer):
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/k8-install.sh | bash
+  # or the alias
+  curl -fsSL https://get.pipeops.dev/agent.sh | bash
+  ```
+
+- Pin a specific installer version:
+
+  ```sh
+  VERSION=v1.2.3 curl -fsSL https://get.pipeops.dev/k8-install.sh | bash
+  ```
+
+- Join a worker node to a cluster via upstream join script (served from this installer domain):
+
+  ```sh
+  export K3S_URL=https://<server>:6443
+  export K3S_TOKEN=<token>
+  curl -fsSL https://get.pipeops.dev/k8-join-worker.sh | bash
+  ```
+
+### Bootstrap vs. Apply Manifest
+
+- Bootstrap (`k8-install.sh` / `agent.sh`): provisions/bootstraps the cluster environment and installs the agent via upstream installer.
+- Apply (`k8-agent.sh`): applies a Kubernetes manifest to an existing cluster/context. Use this when your cluster is already running.
+
+### Handling immutable selector error
+
+If you see: `Deployment "pipeops-agent" is invalid: spec.selector ... field is immutable`, it means an older Deployment exists with different labels. Fix:
+
+- One-time recreate via the installer:
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/k8-agent.sh | bash -s -- --namespace pipeops-system --recreate
+  ```
+
+- Or manually delete then apply:
+
+  ```sh
+  kubectl delete deploy/pipeops-agent -n pipeops-system
+  curl -fsSL https://get.pipeops.dev/k8-agent.sh | bash -s -- --namespace pipeops-system
   ```
 
 ## Security notes
