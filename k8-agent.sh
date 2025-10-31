@@ -32,9 +32,9 @@ done
 default_manifest_url() {
   local repo="pipeopshq/pipeops-k8-agent"
   if [ "$VERSION" = "latest" ]; then
-    printf 'https://github.com/%s/releases/latest/download/k8-agent.yaml' "$repo"
+    printf 'https://raw.githubusercontent.com/%s/main/deployments/agent.yaml' "$repo"
   else
-    printf 'https://github.com/%s/releases/download/%s/k8-agent.yaml' "$repo" "$VERSION"
+    printf 'https://raw.githubusercontent.com/%s/%s/deployments/agent.yaml' "$repo" "$VERSION"
   fi
 }
 
