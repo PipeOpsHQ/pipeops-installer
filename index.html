@@ -27,10 +27,22 @@
       </div>
 
       <div class="card">
+        <h2>Kubernetes Installer</h2>
+        <p>Bootstrap a cluster and install the agent (delegates to upstream installer):</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/k8-install.sh | bash</code></pre>
+        <p>Alias:</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/agent.sh | bash</code></pre>
+        <p>Pin a version:</p>
+        <pre><code>VERSION=v1.2.3 curl -fsSL https://get.pipeops.dev/k8-install.sh | bash</code></pre>
+      </div>
+
+      <div class="card">
         <h2>Kubernetes Agent</h2>
-        <p>Apply via helper script (creates namespace if missing):</p>
+        <p>Apply to an existing cluster (creates namespace if missing):</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/k8-agent.sh | bash -s -- --namespace pipeops-system</code></pre>
-        <p>Or apply a pinned manifest directly (replace with your pinned YAML):</p>
+        <p>Immutable selector error? Recreate the Deployment safely:</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/k8-agent.sh | bash -s -- --namespace pipeops-system --recreate</code></pre>
+        <p>Or apply a manifest directly (replace with your pinned YAML):</p>
         <pre><code>kubectl apply -f https://get.pipeops.dev/k8-agent.yaml</code></pre>
       </div>
 
@@ -38,4 +50,3 @@
     </main>
   </body>
   </html>
-
