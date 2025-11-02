@@ -26,72 +26,92 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Determine tag
-        id: tag
+      - name: Find release with k8-agent.yaml asset
+        id: find_release
         uses: actions/github-script@v7
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         with:
           script: |
-            const inputTag = core.getInput('tag');
-            let tag = inputTag && inputTag.trim().length ? inputTag.trim() : '';
+            const inputTag = process.env.INPUT_TAG || '';
+            let requestedTag = inputTag.trim();
             if (context.eventName === 'repository_dispatch' && context.payload?.client_payload?.tag) {
-              tag = context.payload.client_payload.tag;
+              requestedTag = context.payload.client_payload.tag;
             }
-            if (!tag) {
-              // fetch latest release tag from pipeopshq/pipeops-k8-agent
-              const latest = await github.rest.repos.getLatestRelease({
-                owner: 'pipeopshq',
-                repo: 'pipeops-k8-agent',
-              });
-              tag = latest.data.tag_name;
-            }
-            core.setOutput('tag', tag);
 
-      - name: Validate release and asset
-        id: validate
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const tag = '${{ steps.tag.outputs.tag }}';
-            core.info(`Validating release ${tag} and k8-agent.yaml asset...`);
+            // If a specific tag was requested, validate it has the asset
+            if (requestedTag) {
+              core.info(`Checking requested release ${requestedTag}...`);
+              try {
+                const release = await github.rest.repos.getReleaseByTag({
+                  owner: 'pipeopshq',
+                  repo: 'pipeops-k8-agent',
+                  tag: requestedTag,
+                });
 
-            try {
-              // Check if release exists
-              const release = await github.rest.repos.getReleaseByTag({
-                owner: 'pipeopshq',
-                repo: 'pipeops-k8-agent',
-                tag: tag,
-              });
+                const asset = release.data.assets.find(a => a.name === 'k8-agent.yaml');
+                if (!asset) {
+                  core.setFailed(`Release ${requestedTag} exists but does not contain k8-agent.yaml asset. Available assets: ${release.data.assets.map(a => a.name).join(', ')}`);
+                  return;
+                }
 
-              // Check if k8-agent.yaml asset exists
-              const asset = release.data.assets.find(a => a.name === 'k8-agent.yaml');
-              if (!asset) {
-                core.setFailed(`Release ${tag} exists but does not contain k8-agent.yaml asset. Available assets: ${release.data.assets.map(a => a.name).join(', ')}`);
+                core.info(`✓ Release ${requestedTag} has k8-agent.yaml asset`);
+                core.setOutput('tag', requestedTag);
+                core.setOutput('download_url', asset.browser_download_url);
+                return;
+              } catch (error) {
+                if (error.status === 404) {
+                  core.setFailed(`Release ${requestedTag} not found in pipeopshq/pipeops-k8-agent.`);
+                } else {
+                  core.setFailed(`Failed to validate release: ${error.message}`);
+                }
                 return;
               }
+            }
 
-              core.info(`✓ Release ${tag} exists with k8-agent.yaml asset`);
-              core.setOutput('download_url', asset.browser_download_url);
-            } catch (error) {
-              if (error.status === 404) {
-                core.setFailed(`Release ${tag} not found in pipeopshq/pipeops-k8-agent. Please verify the tag exists.`);
-              } else {
-                core.setFailed(`Failed to validate release: ${error.message}`);
+            // No specific tag requested - find the latest release with k8-agent.yaml
+            core.info('No tag specified, searching for latest release with k8-agent.yaml asset...');
+
+            try {
+              const releases = await github.rest.repos.listReleases({
+                owner: 'pipeopshq',
+                repo: 'pipeops-k8-agent',
+                per_page: 20,
+              });
+
+              const skipped = [];
+              for (const release of releases.data) {
+                const asset = release.assets.find(a => a.name === 'k8-agent.yaml');
+                if (asset) {
+                  if (skipped.length > 0) {
+                    core.warning(`⚠️  Skipped ${skipped.length} release(s) without k8-agent.yaml asset: ${skipped.join(', ')}`);
+                  }
+                  core.info(`✓ Found release ${release.tag_name} with k8-agent.yaml asset`);
+                  core.setOutput('tag', release.tag_name);
+                  core.setOutput('download_url', asset.browser_download_url);
+                  return;
+                }
+                skipped.push(release.tag_name);
               }
+
+              core.setFailed(`No releases found with k8-agent.yaml asset. Checked ${releases.data.length} most recent releases. Skipped: ${skipped.join(', ')}`);
+            } catch (error) {
+              core.setFailed(`Failed to list releases: ${error.message}`);
             }
 
       - name: Fetch manifest
         id: fetch
         run: |
           set -euo pipefail
-          TAG='${{ steps.tag.outputs.tag }}'
+          TAG='${{ steps.find_release.outputs.tag }}'
           echo "Using tag: ${TAG}"
           URL="https://github.com/pipeopshq/pipeops-k8-agent/releases/download/${TAG}/k8-agent.yaml"
           mkdir -p k8-agent
 
-          # Download the manifest (validation step already confirmed it exists)
+          # Download the manifest (find_release step already confirmed it exists)
           if ! curl -fL --retry 3 -o "k8-agent/k8-agent-${TAG}.yaml" "$URL"; then
             echo "Error: Failed to download manifest from ${URL}"
-            echo "This is unexpected as validation passed. Please check network connectivity."
+            echo "This is unexpected as find_release step passed. Please check network connectivity."
             exit 1
           fi
 
@@ -111,7 +131,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
             git add k8-agent.yaml k8-agent/
-            git commit -m "chore(agent): bump k8-agent.yaml to ${{ steps.tag.outputs.tag }}"
+            git commit -m "chore(agent): bump k8-agent.yaml to ${{ steps.find_release.outputs.tag }}"
             git push
           else
             echo "No changes to commit"
