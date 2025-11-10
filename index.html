@@ -48,6 +48,16 @@
         <pre><code>kubectl apply -f https://get.pipeops.dev/k8-agent.yaml</code></pre>
       </div>
 
+      <div class="card">
+        <h2>Uninstaller</h2>
+        <p>Uninstall the PipeOps agent (keeps cluster intact):</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/k8-uninstall.sh | bash</code></pre>
+        <p>Uninstall agent and remove k3s cluster:</p>
+        <pre><code>UNINSTALL_K3S=true curl -fsSL https://get.pipeops.dev/k8-uninstall.sh | bash</code></pre>
+        <p>Force uninstall without prompts:</p>
+        <pre><code>FORCE=true curl -fsSL https://get.pipeops.dev/k8-uninstall.sh | bash</code></pre>
+      </div>
+
       <p style="color:#65748b">Served via GitHub Pages. Update scripts/manifests in this repo to publish changes.</p>
     </main>
     <script>

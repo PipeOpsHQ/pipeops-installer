@@ -15,6 +15,7 @@ Adjust variables in the scripts to match your release assets and binary naming.
 - `agent.sh` — Alias wrapper to `k8-install.sh` for convenience.
 - `k8-agent.sh` — Applies the PipeOps Kubernetes agent manifest (defaults to your GitHub Releases; can be pinned).
 - `k8-agent.yaml` — Placeholder manifest (replace with your pinned agent manifest if you want a stable path).
+- `k8-uninstall.sh` — Delegates to the upstream uninstaller (`scripts/uninstall.sh`).
 - `k8-join-worker.sh` — Delegates to the upstream worker join script (`scripts/join-worker.sh`).
 - `CNAME` — Custom domain for GitHub Pages (`get.pipeops.dev`).
 - `.nojekyll` — Disables Jekyll processing so files serve as raw assets.
@@ -125,6 +126,24 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
   export K3S_URL=https://<server>:6443
   export K3S_TOKEN=<token>
   curl -fsSL https://get.pipeops.dev/k8-join-worker.sh | bash
+  ```
+
+- Uninstall the PipeOps agent (keeps cluster intact):
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/k8-uninstall.sh | bash
+  ```
+
+- Uninstall agent and remove k3s cluster:
+
+  ```sh
+  UNINSTALL_K3S=true curl -fsSL https://get.pipeops.dev/k8-uninstall.sh | bash
+  ```
+
+- Force uninstall without prompts:
+
+  ```sh
+  FORCE=true curl -fsSL https://get.pipeops.dev/k8-uninstall.sh | bash
   ```
 
 ### Bootstrap vs. Apply Manifest
