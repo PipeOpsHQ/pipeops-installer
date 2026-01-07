@@ -51,6 +51,88 @@ tmpdir() {
   mktemp -d 2>/dev/null || mktemp -d -t pipeops
 }
 
+# Compare semantic versions (returns 0 if v1 >= v2, 1 otherwise)
+semver_gte() {
+  local v1="$1" v2="$2"
+  # Strip leading 'v' if present
+  v1="${v1#v}"; v2="${v2#v}"
+  
+  # Split versions into arrays
+  IFS='.' read -ra ver1 <<< "$v1"
+  IFS='.' read -ra ver2 <<< "$v2"
+  
+  # Compare major, minor, patch
+  for i in 0 1 2; do
+    local n1="${ver1[i]:-0}" n2="${ver2[i]:-0}"
+    # Strip any pre-release suffix (e.g., -beta, -rc1)
+    n1="${n1%%-*}"; n2="${n2%%-*}"
+    if [ "$n1" -gt "$n2" ]; then return 0; fi
+    if [ "$n1" -lt "$n2" ]; then return 1; fi
+  done
+  return 0
+}
+
+# Get the latest release tag by semantic version from GitHub API
+get_latest_version() {
+  local repo="$1"
+  need_cmd grep
+  need_cmd sed
+  
+  # Fetch all release tags from GitHub API (up to 100 releases)
+  local tags_url="https://api.github.com/repos/${repo}/releases?per_page=100"
+  local releases
+  
+  # Try to fetch releases
+  if ! releases=$(curl -fsSL "$tags_url" 2>/dev/null); then
+    warn "Failed to fetch releases from API, falling back to /releases/latest"
+    echo "latest"
+    return
+  fi
+  
+  # Check if we got an empty response or API error
+  if [ -z "$releases" ] || echo "$releases" | grep -Eq '"message".*"(rate limit|API rate limit|Not Found|Forbidden)"'; then
+    warn "GitHub API unavailable or rate limited, falling back to /releases/latest"
+    echo "latest"
+    return
+  fi
+  
+  # Parse JSON manually: extract non-prerelease tags
+  # Note: This parsing works with both pretty-printed and compact JSON.
+  # For more robust parsing, consider using jq if available.
+  # Format: each release has "tag_name": "vX.Y.Z", "prerelease": false/true
+  local latest_tag=""
+  local tags_list
+  
+  # Extract all tag_name and prerelease pairs
+  # This approach handles both compact and pretty-printed JSON
+  tags_list=$(echo "$releases" | grep -Eo '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"|"prerelease"[[:space:]]*:[[:space:]]*(true|false)' | paste -d' ' - -)
+  
+  local current_tag="" is_prerelease=""
+  while IFS= read -r line; do
+    if echo "$line" | grep -q '"tag_name"'; then
+      current_tag=$(echo "$line" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    fi
+    if echo "$line" | grep -q '"prerelease"'; then
+      is_prerelease=$(echo "$line" | sed -n 's/.*"prerelease"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p')
+      
+      # Process the pair
+      if [ -n "$current_tag" ] && [ "$is_prerelease" = "false" ]; then
+        if [ -z "$latest_tag" ] || semver_gte "$current_tag" "$latest_tag"; then
+          latest_tag="$current_tag"
+        fi
+      fi
+      current_tag=""
+      is_prerelease=""
+    fi
+  done <<< "$tags_list"
+  
+  if [ -n "$latest_tag" ]; then
+    echo "$latest_tag"
+  else
+    echo "latest"
+  fi
+}
+
 main() {
   need_cmd curl
   need_cmd uname
@@ -58,13 +140,24 @@ main() {
   need_cmd chmod
   need_cmd printf
 
-  local os arch asset_file base_url download_url tdir dest_dir sudo_cmd src_bin
+  local os arch asset_file base_url download_url tdir dest_dir sudo_cmd src_bin resolved_version
   os=$(detect_os)
   arch=$(detect_arch)
 
+  # Resolve version
   if [ "${VERSION}" = "latest" ]; then
-    base_url="https://github.com/${GH_REPO}/releases/latest/download"
+    info "Resolving latest version..."
+    resolved_version=$(get_latest_version "$GH_REPO")
+    if [ "$resolved_version" = "latest" ]; then
+      # Fallback to GitHub's latest redirect
+      base_url="https://github.com/${GH_REPO}/releases/latest/download"
+      info "Using GitHub's latest release"
+    else
+      base_url="https://github.com/${GH_REPO}/releases/download/${resolved_version}"
+      info "Detected latest version: ${resolved_version}"
+    fi
   else
+    resolved_version="$VERSION"
     base_url="https://github.com/${GH_REPO}/releases/download/${VERSION}"
   fi
 
