@@ -78,60 +78,53 @@ get_latest_version() {
   need_cmd grep
   need_cmd sed
   
-  # Fetch all release tags from GitHub API
-  local tags_url="https://api.github.com/repos/${repo}/releases"
+  # Fetch all release tags from GitHub API (up to 100 releases)
+  local tags_url="https://api.github.com/repos/${repo}/releases?per_page=100"
   local releases
   
-  # Try to fetch releases (limited to first 100)
+  # Try to fetch releases
   if ! releases=$(curl -fsSL "$tags_url" 2>/dev/null); then
     warn "Failed to fetch releases from API, falling back to /releases/latest"
     echo "latest"
     return
   fi
   
-  # Check if we got an empty response or error
-  if [ -z "$releases" ] || echo "$releases" | grep -q '"message".*"API rate limit exceeded"'; then
+  # Check if we got an empty response or API error
+  if [ -z "$releases" ] || echo "$releases" | grep -Eq '"message".*"(rate limit|API rate limit|Not Found|Forbidden)"'; then
     warn "GitHub API unavailable or rate limited, falling back to /releases/latest"
     echo "latest"
     return
   fi
   
   # Parse JSON manually: extract non-prerelease tags
+  # Note: This parsing works with both pretty-printed and compact JSON.
+  # For more robust parsing, consider using jq if available.
   # Format: each release has "tag_name": "vX.Y.Z", "prerelease": false/true
   local latest_tag=""
-  local current_tag="" in_release=false prerelease=false
+  local tags_list
   
+  # Extract all tag_name and prerelease pairs
+  # This approach handles both compact and pretty-printed JSON
+  tags_list=$(echo "$releases" | grep -Eo '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"|"prerelease"[[:space:]]*:[[:space:]]*(true|false)' | paste -d' ' - -)
+  
+  local current_tag="" is_prerelease=""
   while IFS= read -r line; do
-    # Detect start of a release object
-    if echo "$line" | grep -q '^ *{$'; then
-      in_release=true
-      current_tag=""
-      prerelease=false
+    if echo "$line" | grep -q '"tag_name"'; then
+      current_tag=$(echo "$line" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
     fi
-    
-    # Extract tag_name
-    if [ "$in_release" = true ] && echo "$line" | grep -q '"tag_name"'; then
-      current_tag=$(echo "$line" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
-    fi
-    
-    # Extract prerelease status
-    if [ "$in_release" = true ] && echo "$line" | grep -q '"prerelease"'; then
-      if echo "$line" | grep -q '"prerelease": *true'; then
-        prerelease=true
-      fi
-    fi
-    
-    # Detect end of a release object
-    if echo "$line" | grep -q '^ *}[,]*$'; then
-      # Process the release if we have a tag and it's not a prerelease
-      if [ -n "$current_tag" ] && [ "$prerelease" = false ]; then
+    if echo "$line" | grep -q '"prerelease"'; then
+      is_prerelease=$(echo "$line" | sed -n 's/.*"prerelease"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p')
+      
+      # Process the pair
+      if [ -n "$current_tag" ] && [ "$is_prerelease" = "false" ]; then
         if [ -z "$latest_tag" ] || semver_gte "$current_tag" "$latest_tag"; then
           latest_tag="$current_tag"
         fi
       fi
-      in_release=false
+      current_tag=""
+      is_prerelease=""
     fi
-  done <<< "$releases"
+  done <<< "$tags_list"
   
   if [ -n "$latest_tag" ]; then
     echo "$latest_tag"
