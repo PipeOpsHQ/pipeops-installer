@@ -1,8 +1,10 @@
-#!/usr/bin/env bash
-set -Eeuo pipefail
-umask 022
+#!/bin/sh
+set -eu
 
 # PipeOps CLI installer
+# Designed for maximum portability: works on GNU/Linux, Alpine/BusyBox,
+# Proxmox LXC containers, macOS, and minimal environments.
+#
 # Customize via env vars:
 #   GH_REPO     - GitHub repo (default: pipeopshq/pipeops-cli)
 #   BINARY_NAME - Binary name inside the release (default: pipeops)
@@ -47,87 +49,126 @@ detect_arch() {
   esac
 }
 
-tmpdir() {
-  mktemp -d 2>/dev/null || mktemp -d -t pipeops
+make_tmpdir() {
+  # mktemp -d is POSIX-ish and works on both GNU and BusyBox.
+  # The -t flag has different semantics across implementations, so avoid it.
+  mktemp -d 2>/dev/null || mktemp -d -t 'pipeops.XXXXXX' 2>/dev/null || {
+    # Last-resort fallback for truly minimal systems
+    _td="/tmp/pipeops-install-$$"
+    mkdir -p "$_td"
+    echo "$_td"
+  }
+}
+
+# Try to download an asset. Returns 0 on success.
+# Usage: try_download <url> <output_path>
+try_download() {
+  curl -fL --retry 3 --connect-timeout 10 -o "$2" "$1" 2>/dev/null
 }
 
 # Compare semantic versions (returns 0 if v1 >= v2, 1 otherwise)
+# POSIX sh compatible - no arrays or bashisms
 semver_gte() {
-  local v1="$1" v2="$2"
+  _sv1="$1" _sv2="$2"
   # Strip leading 'v' if present
-  v1="${v1#v}"; v2="${v2#v}"
-  
-  # Split versions into arrays
-  IFS='.' read -ra ver1 <<< "$v1"
-  IFS='.' read -ra ver2 <<< "$v2"
-  
-  # Compare major, minor, patch
-  for i in 0 1 2; do
-    local n1="${ver1[i]:-0}" n2="${ver2[i]:-0}"
-    # Strip any pre-release suffix (e.g., -beta, -rc1)
-    n1="${n1%%-*}"; n2="${n2%%-*}"
-    if [ "$n1" -gt "$n2" ]; then return 0; fi
-    if [ "$n1" -lt "$n2" ]; then return 1; fi
-  done
+  _sv1="${_sv1#v}"; _sv2="${_sv2#v}"
+
+  # Split on dots and compare major.minor.patch
+  _old_ifs="$IFS"; IFS='.'
+  set -- $_sv1; _maj1="${1:-0}"; _min1="${2:-0}"; _pat1="${3:-0}"
+  set -- $_sv2; _maj2="${1:-0}"; _min2="${2:-0}"; _pat2="${3:-0}"
+  IFS="$_old_ifs"
+
+  # Strip any pre-release suffix (e.g., -beta, -rc1)
+  _maj1="${_maj1%%-*}"; _min1="${_min1%%-*}"; _pat1="${_pat1%%-*}"
+  _maj2="${_maj2%%-*}"; _min2="${_min2%%-*}"; _pat2="${_pat2%%-*}"
+
+  if [ "$_maj1" -gt "$_maj2" ] 2>/dev/null; then return 0; fi
+  if [ "$_maj1" -lt "$_maj2" ] 2>/dev/null; then return 1; fi
+  if [ "$_min1" -gt "$_min2" ] 2>/dev/null; then return 0; fi
+  if [ "$_min1" -lt "$_min2" ] 2>/dev/null; then return 1; fi
+  if [ "$_pat1" -gt "$_pat2" ] 2>/dev/null; then return 0; fi
+  if [ "$_pat1" -lt "$_pat2" ] 2>/dev/null; then return 1; fi
   return 0
 }
 
 # Get the latest release tag by semantic version from GitHub API
 get_latest_version() {
-  local repo="$1"
+  _glv_repo="$1"
   need_cmd grep
   need_cmd sed
-  
+
   # Fetch all release tags from GitHub API (up to 100 releases)
-  local tags_url="https://api.github.com/repos/${repo}/releases?per_page=100"
-  local releases
-  
+  _glv_tags_url="https://api.github.com/repos/${_glv_repo}/releases?per_page=100"
+
   # Try to fetch releases
-  if ! releases=$(curl -fsSL "$tags_url" 2>/dev/null); then
+  if ! _glv_releases=$(curl -fsSL "$_glv_tags_url" 2>/dev/null); then
     warn "Failed to fetch releases from API, falling back to /releases/latest"
     echo "latest"
     return
   fi
-  
+
   # Check if we got an empty response or API error
-  if [ -z "$releases" ] || echo "$releases" | grep -Eq '"message".*"(rate limit|API rate limit|Not Found|Forbidden)"'; then
+  if [ -z "$_glv_releases" ] || echo "$_glv_releases" | grep -Eq '"message".*"(rate limit|API rate limit|Not Found|Forbidden)"'; then
     warn "GitHub API unavailable or rate limited, falling back to /releases/latest"
     echo "latest"
     return
   fi
-  
+
   # Parse JSON manually: extract non-prerelease tags
-  # Note: This parsing works with both pretty-printed and compact JSON.
-  # For more robust parsing, consider using jq if available.
-  # Format: each release has "tag_name": "vX.Y.Z", "prerelease": false/true
-  local latest_tag=""
-  local tags_list
-  
   # Extract all tag_name and prerelease pairs
-  # This approach handles both compact and pretty-printed JSON
-  tags_list=$(echo "$releases" | grep -Eo '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"|"prerelease"[[:space:]]*:[[:space:]]*(true|false)' | paste -d' ' - -)
-  
-  local current_tag="" is_prerelease=""
-  while IFS= read -r line; do
-    if echo "$line" | grep -q '"tag_name"'; then
-      current_tag=$(echo "$line" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  _glv_tags_list=$(echo "$_glv_releases" | grep -Eo '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"|"prerelease"[[:space:]]*:[[:space:]]*(true|false)' | paste -d' ' - -)
+
+  _glv_latest_tag=""
+  _glv_current_tag=""
+  _glv_is_prerelease=""
+
+  echo "$_glv_tags_list" | while IFS= read -r _glv_line; do
+    if echo "$_glv_line" | grep -q '"tag_name"'; then
+      _glv_current_tag=$(echo "$_glv_line" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
     fi
-    if echo "$line" | grep -q '"prerelease"'; then
-      is_prerelease=$(echo "$line" | sed -n 's/.*"prerelease"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p')
-      
+    if echo "$_glv_line" | grep -q '"prerelease"'; then
+      _glv_is_prerelease=$(echo "$_glv_line" | sed -n 's/.*"prerelease"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p')
+
       # Process the pair
-      if [ -n "$current_tag" ] && [ "$is_prerelease" = "false" ]; then
-        if [ -z "$latest_tag" ] || semver_gte "$current_tag" "$latest_tag"; then
-          latest_tag="$current_tag"
+      if [ -n "$_glv_current_tag" ] && [ "$_glv_is_prerelease" = "false" ]; then
+        if [ -z "$_glv_latest_tag" ] || semver_gte "$_glv_current_tag" "$_glv_latest_tag"; then
+          _glv_latest_tag="$_glv_current_tag"
         fi
       fi
-      current_tag=""
-      is_prerelease=""
+      _glv_current_tag=""
+      _glv_is_prerelease=""
     fi
-  done <<< "$tags_list"
-  
-  if [ -n "$latest_tag" ]; then
-    echo "$latest_tag"
+  done
+
+  # The while loop above runs in a subshell due to the pipe, so _glv_latest_tag
+  # won't be visible here. Use a different approach: write to a temp file.
+  _glv_result_file=$(make_tmpdir)/latest_version
+  echo "$_glv_tags_list" | {
+    _glv_latest_tag=""
+    _glv_current_tag=""
+    while IFS= read -r _glv_line; do
+      if echo "$_glv_line" | grep -q '"tag_name"'; then
+        _glv_current_tag=$(echo "$_glv_line" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      fi
+      if echo "$_glv_line" | grep -q '"prerelease"'; then
+        _glv_is_prerelease=$(echo "$_glv_line" | sed -n 's/.*"prerelease"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p')
+        if [ -n "$_glv_current_tag" ] && [ "$_glv_is_prerelease" = "false" ]; then
+          if [ -z "$_glv_latest_tag" ] || semver_gte "$_glv_current_tag" "$_glv_latest_tag"; then
+            _glv_latest_tag="$_glv_current_tag"
+          fi
+        fi
+        _glv_current_tag=""
+      fi
+    done
+    echo "$_glv_latest_tag"
+  } > "$_glv_result_file"
+
+  _glv_latest_tag=$(cat "$_glv_result_file" 2>/dev/null)
+  rm -f "$_glv_result_file"
+
+  if [ -n "$_glv_latest_tag" ]; then
+    echo "$_glv_latest_tag"
   else
     echo "latest"
   fi
@@ -140,11 +181,11 @@ main() {
   need_cmd chmod
   need_cmd printf
 
-  local os arch asset_file base_url download_url tdir dest_dir sudo_cmd src_bin resolved_version
   os=$(detect_os)
   arch=$(detect_arch)
 
   # Resolve version
+  resolved_version=""
   if [ "${VERSION}" = "latest" ]; then
     info "Resolving latest version..."
     resolved_version=$(get_latest_version "$GH_REPO")
@@ -161,19 +202,15 @@ main() {
     base_url="https://github.com/${GH_REPO}/releases/download/${VERSION}"
   fi
 
-  # Resolve asset filename; try common naming patterns until one downloads
+  # Resolve asset filename; try common naming patterns until one downloads.
+  # We avoid bash arrays for POSIX sh compatibility.
+  asset_file=""
   if [ -n "${ASSET_FILE:-}" ]; then
     asset_file="${ASSET_FILE}"
-  else
-    # Preferred naming used by PipeOps releases
-    candidates=(
-      "${ASSET_PREFIX}_${os}_${arch}.${ASSET_EXT}"
-      "${BINARY_NAME}_${os}_${arch}.${ASSET_EXT}"
-      "${BINARY_NAME}-cli_${os}_${arch}.${ASSET_EXT}"
-    )
   fi
 
   # Install prefix
+  dest_dir=""
   if [ -n "${PREFIX:-}" ]; then
     dest_dir="${PREFIX%/}/bin"
   else
@@ -185,34 +222,44 @@ main() {
   fi
 
   sudo_cmd=""
-  if [ ! -w "$dest_dir" ]; then
+  if [ ! -w "$dest_dir" ] 2>/dev/null; then
     if have_cmd sudo; then sudo_cmd="sudo -E"; fi
   fi
 
   info "OS=${os} ARCH=${arch}"
 
-  tdir=$(tmpdir)
+  tdir=$(make_tmpdir)
   trap 'rm -rf "${tdir:-}"' EXIT
-
-  local file_path
   mkdir -p "$tdir"
-  if [ -n "${asset_file:-}" ]; then
+
+  file_path=""
+  download_url=""
+
+  if [ -n "${asset_file}" ]; then
     # Explicit asset path provided
     download_url="${base_url}/${asset_file}"
     file_path="${tdir}/${asset_file##*/}"
     info "Downloading ${download_url}"
-    curl -fL --retry 3 --connect-timeout 10 -o "$file_path" "$download_url" || die "Download failed: $download_url"
+    try_download "$download_url" "$file_path" || die "Download failed: $download_url"
   else
-    # Try candidates until one succeeds
-    local ok=0; local tried="";
-    for af in "${candidates[@]}"; do
+    # Try candidate filenames sequentially (no arrays needed)
+    ok=0
+    tried=""
+    for af in \
+      "${ASSET_PREFIX}_${os}_${arch}.${ASSET_EXT}" \
+      "${BINARY_NAME}_${os}_${arch}.${ASSET_EXT}" \
+      "${BINARY_NAME}-cli_${os}_${arch}.${ASSET_EXT}" \
+    ; do
       download_url="${base_url}/${af}"
-      file_path="${tdir}/${af##*/}"
+      file_path="${tdir}/${af}"
       info "Downloading ${download_url}"
-      if curl -fL --retry 3 --connect-timeout 10 -o "$file_path" "$download_url" ; then
-        asset_file="$af"; ok=1; break
+      if try_download "$download_url" "$file_path"; then
+        asset_file="$af"
+        ok=1
+        break
       else
-        tried+="\n  - ${download_url}"
+        tried="${tried}
+  - ${download_url}"
       fi
     done
     [ "$ok" = 1 ] || die "Download failed. Tried:${tried}"
@@ -225,11 +272,13 @@ main() {
     need_cmd tar
     info "Extracting archive"
     tar -xzf "$file_path" -C "$tdir"
-    # try to find the binary by name
+    # Try to find the binary by name
     if [ -f "${tdir}/${BINARY_NAME}" ]; then
       src_bin="${tdir}/${BINARY_NAME}"
     else
-      src_bin=$(find "$tdir" -type f -name "${BINARY_NAME}" -perm -u+x 2>/dev/null | head -n1 || true)
+      # Use find with numeric permission mode for BusyBox compatibility
+      # (-perm -u+x is GNU-only; -perm -100 is POSIX)
+      src_bin=$(find "$tdir" -type f -name "${BINARY_NAME}" -perm -100 2>/dev/null | head -n1) || true
     fi
   else
     # treat as a raw binary
@@ -250,7 +299,8 @@ main() {
 
   info "Installed ${BINARY_NAME} -> ${dest_dir}/${BINARY_NAME}"
   case ":$PATH:" in
-    *:"$dest_dir":*) ;;
+    *:"$dest_dir":*)
+      ;;
     *)
       warn "${dest_dir} is not in PATH. Add this to your shell profile:"
       printf '\n    export PATH="%s:$PATH"\n\n' "$dest_dir"
@@ -263,52 +313,54 @@ try_verify_checksum() {
   #   VERIFY=auto (default): verify if checksums found; warn on failure/missing
   #   VERIFY=strict: must verify; die on failure/missing
   #   VERIFY=0: skip verification
-  local file_path="$1" download_url="$2" base_url="$3" asset_file="$4"
-  local mode="$VERIFY"
-  case "$mode" in
+  _file_path="$1"
+  _download_url="$2"
+  _base_url="$3"
+  _asset_file="$4"
+  _mode="$VERIFY"
+
+  case "$_mode" in
     0|false|no) return 0 ;;
     auto|strict) ;;
-    *) mode=auto ;;
+    *) _mode=auto ;;
   esac
 
-  # locate checksum file URL
-  local sum_urls=()
+  # Build list of checksum URLs to try (space-separated, no arrays)
+  _sum_urls=""
   if [ -n "${CHECKSUMS_URL:-}" ]; then
-    sum_urls+=("$CHECKSUMS_URL")
+    _sum_urls="${CHECKSUMS_URL}"
   fi
   if [ -n "${CHECKSUMS_ASSET:-}" ]; then
-    sum_urls+=("${base_url}/${CHECKSUMS_ASSET}")
+    _sum_urls="${_sum_urls} ${_base_url}/${CHECKSUMS_ASSET}"
   fi
   # common patterns
-  sum_urls+=(
-    "${download_url}.sha256"
-    "${download_url}.sha256sum"
-    "${download_url}.sha256.txt"
-    "${base_url}/SHA256SUMS"
-    "${base_url}/SHA256SUMS.txt"
-    "${base_url}/checksums.txt"
-  )
+  _sum_urls="${_sum_urls} ${_download_url}.sha256"
+  _sum_urls="${_sum_urls} ${_download_url}.sha256sum"
+  _sum_urls="${_sum_urls} ${_download_url}.sha256.txt"
+  _sum_urls="${_sum_urls} ${_base_url}/SHA256SUMS"
+  _sum_urls="${_sum_urls} ${_base_url}/SHA256SUMS.txt"
+  _sum_urls="${_sum_urls} ${_base_url}/checksums.txt"
 
-  local tmp_dir sum_file url ok=0 basename
-  basename="$(basename "$asset_file")"
-  tmp_dir="$(dirname "$file_path")"
+  _basename="${_asset_file##*/}"
+  _tmp_dir="$(dirname "$_file_path")"
+  _ok=0
 
-  for url in "${sum_urls[@]}"; do
-    sum_file="${tmp_dir}/checksums"
-    if curl -fsL -o "$sum_file" "$url" 2>/dev/null ; then
-      if do_verify_with_file "$file_path" "$sum_file" "$basename" ; then
-        info "Checksum verified using $(basename "$url")"
-        ok=1
+  for _url in $_sum_urls; do
+    _sum_file="${_tmp_dir}/checksums"
+    if curl -fsL -o "$_sum_file" "$_url" 2>/dev/null; then
+      if do_verify_with_file "$_file_path" "$_sum_file" "$_basename"; then
+        info "Checksum verified using ${_url##*/}"
+        _ok=1
         break
       fi
     fi
   done
 
-  if [ "$ok" = 1 ]; then
+  if [ "$_ok" = 1 ]; then
     return 0
   fi
 
-  if [ "$mode" = strict ]; then
+  if [ "$_mode" = strict ]; then
     die "Checksum verification failed or checksums not found"
   else
     warn "Could not verify checksum (no checksums found or mismatch)"
@@ -319,42 +371,41 @@ do_verify_with_file() {
   # Accepts either:
   #   - lines like: <hash>  <filename>
   #   - single hash only (we pair it with the asset filename)
-  local file_path="$1" sum_file="$2" basename="$3"
-  local dir hash_only
+  _vf_file_path="$1"
+  _vf_sum_file="$2"
+  _vf_basename="$3"
 
   if ! have_cmd sha256sum && ! have_cmd shasum; then
     warn "No sha256 verifier found (sha256sum/shasum). Skipping verification."
     return 1
   fi
 
+  # Escape dots in basename for grep pattern
+  _vf_pattern=$(printf '%s' "$_vf_basename" | sed 's/\./\\./g')
+
   # Does the checksum file contain an entry for our basename?
-  if grep -Eiq "\b${basename//./\.}\b" "$sum_file"; then
+  if grep -Ei "$_vf_pattern" "$_vf_sum_file" >/dev/null 2>&1; then
     if have_cmd sha256sum; then
-      (cd "$(dirname "$file_path")" && sha256sum -c "${sum_file}" --ignore-missing)
+      (cd "$(dirname "$_vf_file_path")" && sha256sum -c "${_vf_sum_file}" --ignore-missing >/dev/null 2>&1)
     else
-      (cd "$(dirname "$file_path")" && shasum -a 256 -c "${sum_file}" 2>/dev/null | grep -vi 'No such file' || true)
-      # shasum -c exits non-zero on missing files; re-check the exact file
-      local expected
-      expected="$(grep -Ei "\b${basename//./\.}\b" "$sum_file" | awk '{print $1}' | head -n1)"
-      [ -n "$expected" ] || return 1
-      local actual
-      actual="$(shasum -a 256 "$file_path" | awk '{print $1}')"
-      [ "$expected" = "$actual" ]
+      # shasum fallback (macOS, some BSDs)
+      _expected=$(grep -Ei "$_vf_pattern" "$_vf_sum_file" | awk '{print $1}' | head -n1)
+      [ -n "$_expected" ] || return 1
+      _actual=$(shasum -a 256 "$_vf_file_path" | awk '{print $1}')
+      [ "$_expected" = "$_actual" ]
     fi
     return $?
   fi
 
   # Try single-hash file (64-hex chars only)
-  if grep -Eq '^[a-fA-F0-9]{64}$' "$sum_file"; then
-    local expected
-    expected="$(head -n1 "$sum_file" | tr -d '\r\n')"
-    local actual
+  if grep -Eq '^[a-fA-F0-9]{64}$' "$_vf_sum_file" 2>/dev/null; then
+    _expected=$(head -n1 "$_vf_sum_file" | tr -d '\r\n')
     if have_cmd sha256sum; then
-      actual="$(sha256sum "$file_path" | awk '{print $1}')"
+      _actual=$(sha256sum "$_vf_file_path" | awk '{print $1}')
     else
-      actual="$(shasum -a 256 "$file_path" | awk '{print $1}')"
+      _actual=$(shasum -a 256 "$_vf_file_path" | awk '{print $1}')
     fi
-    [ "$expected" = "$actual" ]
+    [ "$_expected" = "$_actual" ]
     return $?
   fi
 

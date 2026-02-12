@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -Eeuo pipefail
+#!/bin/sh
+set -eu
 
 # Version: e9f67b4
 # Last-Modified: 2025-10-31T03:54:55Z
@@ -9,4 +9,9 @@ set -Eeuo pipefail
 # Usage:
 #   curl -fsSL https://get.pipeops.dev/agent.sh | bash [-- args]
 
-exec bash -c 'curl -fsSL https://get.pipeops.dev/k8-install.sh | bash -s -- "$@"' -- "$@"
+# Prefer bash if available for downstream compatibility, fall back to sh
+if command -v bash >/dev/null 2>&1; then
+  exec bash -c 'curl -fsSL https://get.pipeops.dev/k8-install.sh | bash -s -- "$@"' -- "$@"
+else
+  exec sh -c 'curl -fsSL https://get.pipeops.dev/k8-install.sh | sh -s -- "$@"' -- "$@"
+fi
