@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -Eeuo pipefail
+#!/bin/sh
+set -eu
 
 # Version: 955c47e
 # Last-Modified: 2025-10-31T03:54:04Z
@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do
 done
 
 default_manifest_url() {
-  local repo="pipeopshq/pipeops-k8-agent"
+  repo="pipeopshq/pipeops-k8-agent"
   if [ "$VERSION" = "latest" ]; then
     printf 'https://raw.githubusercontent.com/%s/main/deployments/agent.yaml' "$repo"
   else
@@ -54,7 +54,6 @@ main() {
   need_cmd kubectl
   need_cmd curl
 
-  local url
   url=${MANIFEST_URL:-$(default_manifest_url)}
 
   info "Namespace: ${NAMESPACE}"

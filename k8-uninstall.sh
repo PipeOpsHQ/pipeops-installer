@@ -1,14 +1,12 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # PipeOps K8s Agent Uninstaller Wrapper
 # Delegates to the upstream uninstall script from pipeopshq/pipeops-k8-agent
 
-set -Eeuo pipefail
+set -eu
 
 # Default values
 : "${VERSION:=main}"
 : "${GH_REPO:=PipeOpsHQ/pipeops-k8-agent}"
-
-readonly VERSION GH_REPO
 
 info() { echo "[INFO] $*" >&2; }
 warn() { echo "[WARN] $*" >&2; }
@@ -23,11 +21,18 @@ main() {
     export FORCE=true
   fi
 
-  local url="https://raw.githubusercontent.com/${GH_REPO}/${VERSION}/scripts/uninstall.sh"
+  url="https://raw.githubusercontent.com/${GH_REPO}/${VERSION}/scripts/uninstall.sh"
 
   # Download and execute the upstream uninstaller
-  if ! curl -fsSL "$url" | bash -s -- "$@"; then
-    die "Uninstall failed. Check the output above for details."
+  # Prefer bash if available, fall back to sh
+  if command -v bash >/dev/null 2>&1; then
+    if ! curl -fsSL "$url" | bash -s -- "$@"; then
+      die "Uninstall failed. Check the output above for details."
+    fi
+  else
+    if ! curl -fsSL "$url" | sh -s -- "$@"; then
+      die "Uninstall failed. Check the output above for details."
+    fi
   fi
 
   info "Uninstall complete!"

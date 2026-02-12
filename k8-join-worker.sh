@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -Eeuo pipefail
+#!/bin/sh
+set -eu
 
 # Version: e9f67b4
 # Last-Modified: 2025-10-31T03:54:55Z
@@ -22,8 +22,14 @@ else
 fi
 
 echo "==> Fetching join script from $URL" >&2
-tmp="$(mktemp -d)"
+tmp="$(mktemp -d 2>/dev/null || mktemp -d -t 'pipeops.XXXXXX')"
 trap 'rm -rf "$tmp"' EXIT
 curl -fL --retry 3 -o "$tmp/join-worker.sh" "$URL"
 chmod +x "$tmp/join-worker.sh"
-exec bash "$tmp/join-worker.sh" "$@"
+
+# Prefer bash if available, fall back to sh
+if command -v bash >/dev/null 2>&1; then
+  exec bash "$tmp/join-worker.sh" "$@"
+else
+  exec sh "$tmp/join-worker.sh" "$@"
+fi

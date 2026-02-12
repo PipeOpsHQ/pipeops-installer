@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -Eeuo pipefail
+#!/bin/sh
+set -eu
 
 # Version: 955c47e
 # Last-Modified: 2025-10-31T03:54:04Z
@@ -20,8 +20,14 @@ else
 fi
 
 echo "==> Fetching installer from $URL" >&2
-tmp="$(mktemp -d)"
+tmp="$(mktemp -d 2>/dev/null || mktemp -d -t 'pipeops.XXXXXX')"
 trap 'rm -rf "$tmp"' EXIT
 curl -fL --retry 3 -o "$tmp/install.sh" "$URL"
 chmod +x "$tmp/install.sh"
-exec bash "$tmp/install.sh" "$@"
+
+# The upstream install.sh requires bash; prefer bash if available, fall back to sh
+if command -v bash >/dev/null 2>&1; then
+  exec bash "$tmp/install.sh" "$@"
+else
+  exec sh "$tmp/install.sh" "$@"
+fi
