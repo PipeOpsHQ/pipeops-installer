@@ -2,6 +2,7 @@
 
 This repo serves install scripts and manifests under your custom domain so users can run:
 
+- **Igris Agent**: `curl -fsSL https://get.pipeops.dev/igris.sh | bash`
 - CLI: `curl -fsSL https://get.pipeops.dev/cli.sh | bash`
 - K8s agent: `curl -fsSL https://get.pipeops.dev/k8-agent.sh | bash`
 - Optional direct manifest: `kubectl apply -f https://get.pipeops.dev/k8-agent.yaml`
@@ -10,6 +11,7 @@ Adjust variables in the scripts to match your release assets and binary naming.
 
 ## Files
 
+- `igris.sh` — Installs the Igris Security Agent from GitHub Releases (auto-detects OS/arch, optional systemd setup).
 - `cli.sh` — Installs the PipeOps CLI from GitHub Releases (auto-detects OS/arch).
 - `k8-install.sh` — Delegates to the upstream cluster/agent installer (`scripts/install.sh`).
 - `agent.sh` — Alias wrapper to `k8-install.sh` for convenience.
@@ -75,6 +77,35 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
   - Optional: replace `k8-agent.yaml` in this repo and set `MANIFEST_URL=https://get.pipeops.dev/k8-agent.yaml` for a domain-stable manifest.
 
 ## Usage
+
+### Igris Security Agent
+
+- Install latest Igris agent:
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/igris.sh | bash
+  ```
+
+- Install with auto-enrollment as systemd service (Linux):
+
+  ```sh
+  GATEWAY_URL=https://halo.example.com TOKEN=your-token \
+    curl -fsSL https://get.pipeops.dev/igris.sh | bash
+  ```
+
+- Install a specific version:
+
+  ```sh
+  VERSION=1.0.0 curl -fsSL https://get.pipeops.dev/igris.sh | bash
+  ```
+
+- Run manually after install:
+
+  ```sh
+  igris --gateway-url https://halo.example.com --token YOUR_TOKEN
+  ```
+
+### PipeOps CLI
 
 - Install latest CLI to a standard location (`~/.local/bin` or `/usr/local/bin` if sudo is available):
 

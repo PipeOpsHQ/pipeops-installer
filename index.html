@@ -18,6 +18,17 @@
     <main>
       <h1>PipeOps Installer</h1>
       <div class="meta">Version: f50e2d1 • Last updated: <span id="lastmod">loading…</span></div>
+      <div class="card" style="border-color:#8b5cf6;background:linear-gradient(135deg,#faf5ff 0%,#fff 100%)">
+        <h2>🛡️ Igris Security Agent</h2>
+        <p>Install the Igris agent for autonomous security monitoring:</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | bash</code></pre>
+        <p>Install with auto-enrollment (Linux systemd service):</p>
+        <pre><code>GATEWAY_URL=https://halo.example.com TOKEN=xxx \
+  curl -fsSL https://get.pipeops.dev/igris.sh | bash</code></pre>
+        <p>Pin a specific version:</p>
+        <pre><code>VERSION=1.0.0 curl -fsSL https://get.pipeops.dev/igris.sh | bash</code></pre>
+      </div>
+
       <div class="card">
         <h2>CLI</h2>
         <p>Install the latest CLI:</p>
