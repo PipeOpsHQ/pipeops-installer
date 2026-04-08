@@ -69,6 +69,17 @@
         <pre><code>FORCE=true curl -fsSL https://get.pipeops.dev/k8-uninstall.sh | bash</code></pre>
       </div>
 
+      <div class="card" style="border-color:#4285f4;background:linear-gradient(135deg,#e8f0fe 0%,#fff 100%)">
+        <h2>☁️ GCP Credentials Setup</h2>
+        <p>Create a GCP service account with the permissions required for PipeOps provisioning:</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/create_credentials_gcp.sh | bash -s -- &lt;project_id&gt; &lt;role_name&gt; &lt;sa_name&gt;</code></pre>
+        <p>Or download and run manually:</p>
+        <pre><code>curl -fsSL -o create_credentials_gcp.sh https://get.pipeops.dev/create_credentials_gcp.sh
+chmod +x create_credentials_gcp.sh
+./create_credentials_gcp.sh my-project pipeops-role pipeops-sa</code></pre>
+        <p>Prerequisites: <code>gcloud</code> CLI (authenticated) and <code>jq</code>.</p>
+      </div>
+
       <p style="color:#65748b">Served via GitHub Pages. Update scripts/manifests in this repo to publish changes.</p>
     </main>
     <script>
