@@ -698,9 +698,9 @@ fi
 # --- Bind role to service account --------------------------------------
 echo "Binding role to service account ..."
 gcloud projects add-iam-policy-binding "$project_name" \
-    --member="serviceAccount:$service_account_email" \
-    --role="$role_id" \
-    --condition=None \
+    --member="serviceAccount:${service_account_email}" \
+    --role="${role_id}" \
+    --no-condition \
     --quiet >/dev/null
 echo "  Role binding applied."
 
