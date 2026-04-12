@@ -52,6 +52,7 @@ apis=(
     storage.googleapis.com
     cloudresourcemanager.googleapis.com
     run.googleapis.com
+    gkehub.googleapis.com
 )
 for api in "${apis[@]}"; do
     if ! gcloud services enable "$api" --project="$project_name" --quiet 2>/dev/null; then
