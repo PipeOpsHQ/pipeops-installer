@@ -16,7 +16,7 @@ set -euo pipefail
 # ─── Configuration ───────────────────────────────────────────────────────────
 GH_REPO="${GH_REPO:-PipeOpsHQ/halo}"
 BINARY_NAME="${BINARY_NAME:-igris}"
-VERSION="${VERSION:-}"
+VERSION="${VERSION:-0.6.1}"
 PREFIX="${PREFIX:-}"
 VERIFY="${VERIFY:-auto}"
 
