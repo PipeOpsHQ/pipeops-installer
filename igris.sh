@@ -77,7 +77,8 @@ get_latest_version() {
     fi
     
     if [[ -z "$latest" ]]; then
-        error "Could not determine latest version. Set VERSION=x.y.z explicitly."
+        warn "Could not determine latest version from GitHub API (repo may be private)."
+        error "Set VERSION=x.y.z explicitly."
     fi
     
     echo "$latest"
