@@ -395,7 +395,39 @@ ${BLUE}Documentation:${NC}
 EOF
 }
 
-# ─── Main ────────────────────────────────────────────────────────────────────
+# ─── Run Agent Directly ──────────────────────────────────────────────────────
+run_agent() {
+    local gateway_url token workspace_id tenant_id org_id requested_mode mode
+    gateway_url="$(resolve_gateway_url)"
+    token="$(resolve_agent_token)"
+    workspace_id="$(resolve_workspace_id)"
+    tenant_id="$(resolve_tenant_id)"
+    org_id="$(resolve_org_id)"
+    requested_mode="$(resolve_requested_mode)"
+
+    local missing
+    missing="$(missing_service_requirements)"
+    if [[ -n "$missing" ]]; then
+        warn "Cannot start agent: missing required env vars: ${missing}"
+        return
+    fi
+
+    requested_mode="${requested_mode:-host}"
+    mode="$(normalize_mode "$requested_mode")" || {
+        warn "Unsupported deployment mode: ${requested_mode}, defaulting to host"
+        mode="host"
+    }
+
+    info "Starting Igris Agent..."
+    export IGRIS_GATEWAY_URL="$gateway_url"
+    export IGRIS_AGENT_TOKEN="$token"
+    export IGRIS_WORKSPACE_ID="$workspace_id"
+    export IGRIS_TENANT_ID="$tenant_id"
+    export IGRIS_ORG_ID="$org_id"
+    export IGRIS_MODE="$mode"
+
+    exec "${INSTALL_DIR}/${BINARY_NAME}"
+}
 main() {
     echo ""
     echo "╔═══════════════════════════════════════════════════════════════╗"
@@ -445,10 +477,20 @@ main() {
 
     # Create systemd service (Linux only). In curl|bash flows stdin is not a
     # TTY, so auto-configure when bootstrap env vars are provided.
-    if [[ -t 0 ]]; then
-        create_systemd_service
-    elif has_bootstrap_env; then
-        create_systemd_service true
+    local used_systemd=false
+    if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl &> /dev/null; then
+        if [[ -t 0 ]]; then
+            create_systemd_service
+            used_systemd=true
+        elif has_bootstrap_env; then
+            create_systemd_service true
+            used_systemd=true
+        fi
+    fi
+
+    # If systemd wasn't used but bootstrap env vars are set, run the agent directly
+    if [[ "$used_systemd" == "false" ]] && has_bootstrap_env; then
+        run_agent
     fi
 
     # Print usage
