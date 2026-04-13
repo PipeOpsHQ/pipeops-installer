@@ -1,0 +1,130 @@
+name: Sync Igris Agent Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Halo release tag (e.g., v0.6.1). Leave empty for latest."
+        required: false
+        type: string
+  repository_dispatch:
+    types: [igris_released]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-igris-release
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.HALO_REPO_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          tag="${INPUT_TAG:-}"
+
+          # repository_dispatch payload takes priority
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            dispatch_tag='${{ github.event.client_payload.tag }}'
+            [[ -n "$dispatch_tag" ]] && tag="$dispatch_tag"
+          fi
+
+          # Fall back to latest release
+          if [[ -z "$tag" ]]; then
+            echo "No tag specified, fetching latest release from PipeOpsHQ/halo..."
+            tag=$(gh release view --repo PipeOpsHQ/halo --json tagName --jq '.tagName')
+          fi
+
+          echo "Resolved tag: ${tag}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+          # Extract version number (strip leading v)
+          version="${tag#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Download assets from halo
+        env:
+          GH_TOKEN: ${{ secrets.HALO_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag='${{ steps.resolve.outputs.tag }}'
+          mkdir -p dist
+
+          echo "Downloading release assets for ${tag}..."
+          gh release download "$tag" \
+            --repo PipeOpsHQ/halo \
+            --dir dist \
+            --pattern '*.tar.gz' \
+            --pattern '*.zip' \
+            --pattern 'checksums.txt'
+
+          echo "Downloaded assets:"
+          ls -lh dist/
+
+      - name: Check for existing release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ steps.resolve.outputs.tag }}'
+
+          if gh release view "$tag" --repo "${{ github.repository }}" &>/dev/null; then
+            echo "Release ${tag} already exists, will update"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ steps.resolve.outputs.tag }}'
+          version='${{ steps.resolve.outputs.version }}'
+
+          notes="Igris Agent ${version} — synced from [PipeOpsHQ/halo ${tag}](https://github.com/PipeOpsHQ/halo/releases/tag/${tag})"
+
+          if [[ '${{ steps.check.outputs.exists }}' == 'true' ]]; then
+            echo "Deleting existing release ${tag}..."
+            gh release delete "$tag" --repo "${{ github.repository }}" --yes --cleanup-tag || true
+          fi
+
+          echo "Creating release ${tag}..."
+          gh release create "$tag" \
+            --repo "${{ github.repository }}" \
+            --title "Igris Agent ${version}" \
+            --notes "$notes" \
+            dist/*
+
+          echo "✓ Release ${tag} published with $(ls dist/ | wc -l) assets"
+
+      - name: Update installer default version
+        run: |
+          set -euo pipefail
+          version='${{ steps.resolve.outputs.version }}'
+
+          sed -i "s/^VERSION=\".*\"/VERSION=\"${version}\"/" igris.sh
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ! git diff --quiet igris.sh; then
+            git add igris.sh
+            git commit -m "chore(igris): bump default VERSION to ${version}"
+            git push
+          else
+            echo "VERSION already set to ${version}, no update needed"
+          fi
