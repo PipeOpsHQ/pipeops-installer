@@ -20,9 +20,10 @@ set -euo pipefail
 VERSION="0.6.1"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
-REPO="PipeOpsHQ/halo"
+REPO="PipeOpsHQ/pipeops-installer"
 GITHUB_URL="https://github.com/${REPO}"
 RELEASES_URL="${GITHUB_URL}/releases"
+DOCS_URL="https://github.com/PipeOpsHQ/halo"
 
 # Colors
 RED='\033[0;31m'
@@ -318,7 +319,7 @@ EOF
     sudo tee "$service_file" > /dev/null << EOF
 [Unit]
 Description=Igris Security Agent
-Documentation=${GITHUB_URL}
+Documentation=${DOCS_URL}
 After=network-online.target
 Wants=network-online.target
 
@@ -389,7 +390,7 @@ ${BLUE}Examples:${NC}
     WORKSPACE_ID=1 TENANT_ID=1 ORG_ID=1 MODE=host bash
 
 ${BLUE}Documentation:${NC}
-  ${GITHUB_URL}
+  ${DOCS_URL}
 
 EOF
 }
