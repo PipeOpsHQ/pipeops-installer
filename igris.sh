@@ -34,7 +34,7 @@ NC='\033[0m'
 # ─── Helper Functions ────────────────────────────────────────────────────────
 info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
 success() { echo -e "${GREEN}[OK]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 need_cmd() {
