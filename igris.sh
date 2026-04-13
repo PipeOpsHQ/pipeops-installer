@@ -52,29 +52,28 @@ detect_os() {
 
 detect_arch() {
     case "$(uname -m)" in
-        x86_64|amd64)   echo "amd64" ;;
+        x86_64|amd64)   echo "x86_64" ;;
         aarch64|arm64)  echo "arm64" ;;
-        armv7l|armv7)   echo "arm" ;;
+        armv7l|armv7)   echo "armv7" ;;
         *)              error "Unsupported architecture: $(uname -m)" ;;
     esac
 }
 
 # ─── Get Latest Version ──────────────────────────────────────────────────────
 get_latest_version() {
-    local api_url="https://api.github.com/repos/${GH_REPO}/releases"
+    local api_url="https://api.github.com/repos/${GH_REPO}/releases/latest"
     local latest=""
     
-    # Find latest agent release (tags starting with agent-v)
     if command -v curl &> /dev/null; then
         latest=$(curl -fsSL "${api_url}" 2>/dev/null | \
-                 grep -o '"tag_name": *"agent-v[^"]*"' | \
+                 grep -o '"tag_name": *"v[^"]*"' | \
                  head -1 | \
-                 sed 's/.*"agent-v\([^"]*\)".*/\1/')
+                 sed 's/.*"v\([^"]*\)".*/\1/')
     elif command -v wget &> /dev/null; then
         latest=$(wget -qO- "${api_url}" 2>/dev/null | \
-                 grep -o '"tag_name": *"agent-v[^"]*"' | \
+                 grep -o '"tag_name": *"v[^"]*"' | \
                  head -1 | \
-                 sed 's/.*"agent-v\([^"]*\)".*/\1/')
+                 sed 's/.*"v\([^"]*\)".*/\1/')
     fi
     
     if [[ -z "$latest" ]]; then
@@ -128,13 +127,12 @@ install_binary() {
     local ext=""
     [[ "$os" == "windows" ]] && ext=".exe"
     
-    local asset_name="${BINARY_NAME}-${os}-${arch}${ext}"
-    local archive_name="${asset_name}.tar.gz"
-    [[ "$os" == "windows" ]] && archive_name="${BINARY_NAME}-${os}-${arch}.zip"
+    local archive_name="${BINARY_NAME}_${version}_${os}_${arch}.tar.gz"
+    [[ "$os" == "windows" ]] && archive_name="${BINARY_NAME}_${version}_${os}_${arch}.zip"
     
-    local base_url="https://github.com/${GH_REPO}/releases/download/agent-v${version}"
+    local base_url="https://github.com/${GH_REPO}/releases/download/v${version}"
     local archive_url="${base_url}/${archive_name}"
-    local checksum_url="${base_url}/${asset_name}.sha256"
+    local checksum_url="${base_url}/checksums.txt"
     
     # Create temp directory
     local tmp_dir
@@ -145,23 +143,14 @@ install_binary() {
     download "$archive_url" "${tmp_dir}/${archive_name}" || \
         error "Failed to download: ${archive_url}"
     
-    # Extract
-    cd "$tmp_dir"
-    if [[ "$os" == "windows" ]]; then
-        need_cmd unzip
-        unzip -q "$archive_name"
-    else
-        tar -xzf "$archive_name"
-    fi
-    
     # Verify checksum
     if [[ "$VERIFY" != "skip" ]]; then
         info "Verifying checksum..."
-        local checksum_file="${tmp_dir}/checksum.sha256"
+        local checksum_file="${tmp_dir}/checksums.txt"
         if download "$checksum_url" "$checksum_file" 2>/dev/null; then
             local expected
-            expected=$(cat "$checksum_file" | awk '{print $1}')
-            if verify_checksum "$asset_name" "$expected"; then
+            expected=$(grep "  ${archive_name}$" "$checksum_file" | awk '{print $1}')
+            if [[ -n "$expected" ]] && verify_checksum "${tmp_dir}/${archive_name}" "$expected"; then
                 success "Checksum verified"
             else
                 if [[ "$VERIFY" == "strict" ]]; then
@@ -179,6 +168,15 @@ install_binary() {
         fi
     fi
     
+    # Extract
+    cd "$tmp_dir"
+    if [[ "$os" == "windows" ]]; then
+        need_cmd unzip
+        unzip -q "$archive_name"
+    else
+        tar -xzf "$archive_name"
+    fi
+    
     # Determine install location
     local install_dir="$PREFIX"
     if [[ -z "$install_dir" ]]; then
@@ -192,16 +190,17 @@ install_binary() {
     fi
     
     local target="${install_dir}/${BINARY_NAME}${ext}"
+    local binary_file="${BINARY_NAME}${ext}"
     
     info "Installing to ${target}..."
     
-    chmod +x "$asset_name"
+    chmod +x "$binary_file"
     
     if [[ -w "$install_dir" ]]; then
-        mv "$asset_name" "$target"
+        mv "$binary_file" "$target"
     else
         info "Requesting sudo access..."
-        sudo mv "$asset_name" "$target"
+        sudo mv "$binary_file" "$target"
     fi
     
     success "Igris Agent v${version} installed to ${target}"
