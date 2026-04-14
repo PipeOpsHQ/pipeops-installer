@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-VERSION="1.2.3"
+VERSION="1.3.0"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
 REPO="PipeOpsHQ/pipeops-installer"
