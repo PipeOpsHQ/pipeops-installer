@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-VERSION="1.10.4"
+VERSION="0.47.7"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
 REPO="PipeOpsHQ/halo"
@@ -990,6 +990,150 @@ ${BLUE}Documentation:${NC}
 EOF
 }
 
+# ─── Create Self-Daemonized Runtime (no service manager) ─────────────────────
+# Fallback used when systemd, OpenRC, and launchd are all absent (minimal
+# containers, LXC without an init manager, distroless-ish images that ship a
+# shell, etc). Uses igris' built-in --daemon mode so the agent forks into the
+# background, writes a PID file, and keeps running after this installer exits.
+#
+# Also drops a small SysV-style /etc/init.d/igris wrapper that calls
+# `igris --daemon` / `igris --stop` so a reboot picks the agent back up if
+# /etc/init.d is scanned by the host's init (BusyBox init, Alpine pre-OpenRC,
+# some Docker-in-Docker setups). When even that's missing operators get a
+# clear "run on boot via your own mechanism" message instead of a silent gap.
+create_daemonized_runtime() {
+    local auto_config="${1:-false}"
+
+    # Only meaningful on Unix-like hosts (Windows uses the SCM path).
+    if [[ "$(uname -s)" == "MINGW"* || "$(uname -s)" == "CYGWIN"* || "$(uname -s)" == "MSYS"* ]]; then
+        return
+    fi
+
+    if [[ "$auto_config" != "true" ]]; then
+        read -p "No service manager detected. Run Igris in self-daemonized mode? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            return
+        fi
+    else
+        info "No systemd/OpenRC/launchd detected — falling back to igris --daemon mode."
+    fi
+
+    local gateway_url token workspace_id tenant_id org_id requested_mode mode
+    gateway_url="$(resolve_gateway_url)"
+    token="$(resolve_agent_token)"
+    workspace_id="$(resolve_workspace_id)"
+    tenant_id="$(resolve_tenant_id)"
+    org_id="$(resolve_org_id)"
+    requested_mode="$(resolve_requested_mode)"
+
+    if [[ "$auto_config" == "true" ]]; then
+        local missing
+        missing="$(missing_service_requirements)"
+        if [[ -n "$missing" ]]; then
+            warn "Skipping daemonized runtime: missing required env vars: ${missing}"
+            info "Set GATEWAY_URL/TOKEN/WORKSPACE_ID (or IGRIS_* equivalents) to auto-start the daemon."
+            return
+        fi
+    fi
+
+    requested_mode="${requested_mode:-host}"
+    mode="$(normalize_mode "$requested_mode")" || error "Unsupported deployment mode / agent type: ${requested_mode}"
+
+    local env_file="/etc/default/igris"
+    local pid_file="/var/lib/igris/igris.pid"
+    local log_file="/var/log/igris/igris.log"
+    local init_script="/etc/init.d/igris"
+
+    # Use sudo only when not already root — minimal containers often have no sudo.
+    local SUDO=""
+    if [[ "$(id -u)" -ne 0 ]]; then
+        if command -v sudo >/dev/null 2>&1; then
+            SUDO="sudo"
+        else
+            warn "Not root and no sudo available — cannot create system paths. Try re-running as root."
+            return
+        fi
+    fi
+
+    info "Writing agent environment to ${env_file}..."
+    write_agent_env_file "$env_file" "$gateway_url" "$token" "$workspace_id" "$tenant_id" "$org_id" "$mode"
+
+    $SUDO mkdir -p /var/lib/igris /var/log/igris
+    $SUDO chmod 700 /var/lib/igris 2>/dev/null || true
+    $SUDO chmod 755 /var/log/igris 2>/dev/null || true
+
+    # Best-effort SysV init script so the daemon comes back after reboot if
+    # /etc/init.d is honoured. Harmless if no init scans it.
+    if [[ -d /etc/init.d ]] || $SUDO mkdir -p /etc/init.d 2>/dev/null; then
+        info "Writing SysV init script to ${init_script}..."
+        $SUDO tee "$init_script" > /dev/null << EOF
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          igris
+# Required-Start:    \$network \$remote_fs
+# Required-Stop:     \$network \$remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Igris Security Agent (self-daemonized)
+### END INIT INFO
+
+ENV_FILE="${env_file}"
+BIN="${INSTALL_DIR}/${BINARY_NAME}"
+PID_FILE="${pid_file}"
+LOG_FILE="${log_file}"
+
+[ -r "\$ENV_FILE" ] && . "\$ENV_FILE"
+export \$(grep -v '^#' "\$ENV_FILE" 2>/dev/null | cut -d= -f1) 2>/dev/null
+
+case "\$1" in
+    start)
+        "\$BIN" --daemon --pid-file="\$PID_FILE" --log-file="\$LOG_FILE"
+        ;;
+    stop)
+        "\$BIN" --stop --pid-file="\$PID_FILE"
+        ;;
+    status)
+        "\$BIN" --status --pid-file="\$PID_FILE"
+        ;;
+    restart)
+        "\$BIN" --stop --pid-file="\$PID_FILE"
+        sleep 1
+        "\$BIN" --daemon --pid-file="\$PID_FILE" --log-file="\$LOG_FILE"
+        ;;
+    *)
+        echo "Usage: \$0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+exit 0
+EOF
+        $SUDO chmod 755 "$init_script"
+    fi
+
+    # Stop any previously-running daemon so re-runs are idempotent.
+    "${INSTALL_DIR}/${BINARY_NAME}" --stop --pid-file="$pid_file" >/dev/null 2>&1 || true
+
+    info "Starting igris --daemon (pid_file=${pid_file}, log_file=${log_file})..."
+    # Source env file then exec the daemon. set -a exports everything in env_file.
+    if ! $SUDO sh -c "set -a; . '${env_file}'; set +a; '${INSTALL_DIR}/${BINARY_NAME}' --daemon --pid-file='${pid_file}' --log-file='${log_file}'"; then
+        warn "igris --daemon failed to start. Check ${log_file} for details."
+        return
+    fi
+
+    # Verify the PID file landed and the process is alive.
+    sleep 1
+    if "${INSTALL_DIR}/${BINARY_NAME}" --status --pid-file="$pid_file" >/dev/null 2>&1; then
+        success "Igris running in self-daemonized mode."
+        IGRIS_SERVICE_STARTED="true"
+        info "Check status: ${INSTALL_DIR}/${BINARY_NAME} --status --pid-file=${pid_file}"
+        info "Stop daemon:  ${INSTALL_DIR}/${BINARY_NAME} --stop   --pid-file=${pid_file}"
+        info "Logs:         ${log_file}"
+    else
+        warn "Daemon start reported success but --status shows no running process. See ${log_file}."
+    fi
+}
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 main() {
     echo ""
@@ -1114,18 +1258,30 @@ main() {
     fi
 
     # Create a service when supported. In curl|bash flows stdin is not a TTY,
-    # so auto-configure when bootstrap env vars are provided.
+    # so auto-configure when bootstrap env vars are provided. When none of the
+    # standard service managers are available (minimal containers, LXC without
+    # an init manager, etc), fall back to igris' built-in --daemon mode so the
+    # agent still backgrounds itself instead of leaving the operator stranded.
     if [[ -t 0 ]]; then
         create_systemd_service
         create_openrc_service
         create_launchd_service
+        if [[ "$IGRIS_SERVICE_STARTED" != "true" ]]; then
+            create_daemonized_runtime
+        fi
     elif has_bootstrap_env; then
         create_systemd_service true
         create_openrc_service true
         create_launchd_service true
 
         if [[ "$IGRIS_SERVICE_STARTED" != "true" ]]; then
-            error "Igris binary was installed, but no supported service manager started it. Supported daemon managers are systemd, OpenRC, and launchd. Start igris manually with the printed environment or install a supported service manager."
+            create_daemonized_runtime true
+        fi
+
+        if [[ "$IGRIS_SERVICE_STARTED" != "true" ]]; then
+            warn "Igris binary was installed, but it could not be started in the background on this host."
+            warn "No supported service manager (systemd, OpenRC, launchd) and --daemon mode also failed."
+            warn "Inspect /var/log/igris/igris.log (if present) or run '${INSTALL_DIR}/${BINARY_NAME}' directly to see startup errors."
         fi
     fi
     
