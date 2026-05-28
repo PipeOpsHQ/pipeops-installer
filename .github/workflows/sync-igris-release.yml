@@ -111,20 +111,54 @@ jobs:
 
           echo "✓ Release ${tag} published with $(ls dist/ | wc -l) assets"
 
-      - name: Update installer default version
+      - name: Sync full installer script from halo-gateway
+        env:
+          GH_TOKEN: ${{ secrets.HALO_REPO_TOKEN }}
         run: |
           set -euo pipefail
+          tag='${{ steps.resolve.outputs.tag }}'
           version='${{ steps.resolve.outputs.version }}'
 
-          sed -i "s/^VERSION=\".*\"/VERSION=\"${version}\"/" igris.sh
+          # Pull the CANONICAL install script from halo at the released tag.
+          # Previously this step only sed'd the VERSION= line, leaving the
+          # rest of igris.sh frozen — so features added to halo's installer
+          # (--daemon, update detection, OpenRC/launchd hardening, etc.)
+          # never reached the CDN. Now we mirror the whole file so the CDN
+          # script stays in lock-step with the released agent.
+          echo "Fetching scripts/install-agent.sh from PipeOpsHQ/halo @ ${tag}..."
+          gh api "repos/PipeOpsHQ/halo/contents/scripts/install-agent.sh?ref=${tag}" \
+            --jq '.content' | base64 -d > igris.sh.new
+
+          if [[ ! -s igris.sh.new ]]; then
+            echo "::error::Downloaded igris.sh is empty — refusing to clobber the live CDN script."
+            exit 1
+          fi
+
+          # Sanity: shellcheck-free syntax check, plus require the canonical
+          # entrypoint marker so we don't accidentally serve an unrelated
+          # file if the upstream path ever moves.
+          bash -n igris.sh.new
+          if ! grep -q 'Igris Agent Installer' igris.sh.new; then
+            echo "::error::Sanity check failed: downloaded script doesn't look like the Igris installer."
+            exit 1
+          fi
+
+          # The VERSION= line in halo's repo lags the release until the
+          # update-install-script job in halo-gateway runs. Force-set it
+          # here so the CDN copy is always pinned to the release we just
+          # published, regardless of when halo's own bumper ran.
+          sed -i "s/^VERSION=\".*\"/VERSION=\"${version}\"/" igris.sh.new
+
+          chmod +x igris.sh.new
+          mv igris.sh.new igris.sh
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           if ! git diff --quiet igris.sh; then
             git add igris.sh
-            git commit -m "chore(igris): bump default VERSION to ${version}"
+            git commit -m "chore(igris): sync from halo ${tag} (VERSION=${version})"
             git push
           else
-            echo "VERSION already set to ${version}, no update needed"
+            echo "igris.sh already in sync with ${tag}, no update needed"
           fi
