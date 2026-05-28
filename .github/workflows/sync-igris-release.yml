@@ -24,6 +24,67 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # PipeOpsHQ/halo is a PRIVATE repo, so this workflow can't use the
+      # default GITHUB_TOKEN (it's scoped to pipeops-installer only). It
+      # requires a separate PAT, stored in this repo's Actions secrets as
+      # HALO_REPO_TOKEN, with at least:
+      #   - Repository access: PipeOpsHQ/halo
+      #   - Permissions: Contents (read) + Metadata (read)
+      #
+      # Run this step first so a missing/invalid PAT fails the job with a
+      # clear, actionable error — not a cryptic mid-job 401 from gh.
+      - name: Verify HALO_REPO_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.HALO_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            cat >&2 <<'EOF'
+          ::error::HALO_REPO_TOKEN secret is not set on this repository.
+
+          The sync workflow needs a Personal Access Token with read access
+          to PipeOpsHQ/halo (a private repo).
+
+          To provision:
+            1. Create a fine-grained PAT at
+               https://github.com/settings/personal-access-tokens/new
+               * Resource owner: PipeOpsHQ
+               * Repository access: Only select repositories → PipeOpsHQ/halo
+               * Repository permissions:
+                   - Contents: Read-only
+                   - Metadata: Read-only (auto-included)
+            2. Copy the generated token.
+            3. Add it as an Actions secret named HALO_REPO_TOKEN at
+               https://github.com/PipeOpsHQ/pipeops-installer/settings/secrets/actions
+            4. Re-run this workflow.
+          EOF
+            exit 1
+          fi
+
+          # Probe the API once with the supplied token. A 200 means the
+          # token is valid AND has access to halo. Anything else means the
+          # token is bad — surface the actual status code so the operator
+          # can tell expired-vs-revoked-vs-missing-scope apart.
+          if ! status=$(gh api -i "repos/PipeOpsHQ/halo" --jq '.full_name' 2>&1); then
+            cat >&2 <<EOF
+          ::error::HALO_REPO_TOKEN is set but cannot read PipeOpsHQ/halo.
+
+          API response:
+          ${status}
+
+          Common causes:
+            * PAT expired — rotate at https://github.com/settings/personal-access-tokens
+            * PAT lacks "Contents: Read" on PipeOpsHQ/halo
+            * PAT was created against the wrong resource owner (must be PipeOpsHQ, not a personal account)
+            * Repo was renamed or the token was scoped to a different repo
+
+          See the comment block above the Verify step for re-provisioning steps.
+          EOF
+            exit 1
+          fi
+          echo "::notice::HALO_REPO_TOKEN verified — can read PipeOpsHQ/halo"
+
       - name: Resolve release tag
         id: resolve
         env:
