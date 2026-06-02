@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-VERSION="0.47.7"
+VERSION="0.69.0"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
 REPO="PipeOpsHQ/halo"
