@@ -10,10 +10,11 @@
 #   IGRIS_AGENT_TOKEN  - Agent bootstrap JWT or API key (aliases: IGRIS_TOKEN, TOKEN)
 #   IGRIS_WORKSPACE_ID - Optional workspace ID/UUID override (alias: WORKSPACE_ID)
 #   IGRIS_MODE         - Deployment mode / agent type (alias: MODE)
-#   IGRIS_BINARY_BASE_URL - Optional base URL for raw test binaries named igris-<os>-<arch>[.exe]
-#   IGRIS_GITHUB_TOKEN - GitHub token (repo:read) for the PRIVATE release repo
-#                        (aliases: GITHUB_TOKEN, GH_TOKEN). Required to install
-#                        from GitHub releases; unauthenticated requests 404.
+#   IGRIS_BINARY_BASE_URL - Optional base URL for raw/self-hosted binaries named igris-<os>-<arch>[.exe]
+#   IGRIS_RELEASE_REPO - GitHub release repo for public agent assets
+#                        (default: PipeOpsHQ/pipeops-installer)
+#   IGRIS_GITHUB_TOKEN - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
+#                        for private release repo overrides or rate limits.
 #
 
 set -euo pipefail
@@ -27,18 +28,18 @@ if [[ "$(id -u)" -eq 0 ]] && ! command -v sudo >/dev/null 2>&1; then
 fi
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-VERSION="0.79.1"
+REQUESTED_VERSION="${IGRIS_VERSION:-}"
+VERSION="${REQUESTED_VERSION:-0.79.1}"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
-REPO="PipeOpsHQ/halo"
+REPO="${IGRIS_RELEASE_REPO:-PipeOpsHQ/pipeops-installer}"
 GITHUB_URL="https://github.com/${REPO}"
 RELEASES_URL="${GITHUB_URL}/releases"
 IGRIS_SERVICE_STARTED="false"
 
-# GitHub auth. The Igris release assets live in the PRIVATE repo ${REPO}, so the
-# releases API and asset downloads return HTTP 404 to UNAUTHENTICATED requests.
-# Supply a token (repo:read) via any of these env vars to install from GitHub;
-# otherwise use IGRIS_BINARY_BASE_URL to install from an artifact server instead.
+# GitHub auth is optional for the default public release repo. It is still
+# supported for private release repo overrides or environments that need a
+# higher GitHub API rate limit.
 GITHUB_TOKEN_VALUE="${IGRIS_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
 
 # Colors for output
@@ -99,21 +100,6 @@ get_first_env() {
 
 resolve_gateway_url() {
     get_first_env IGRIS_GATEWAY_URL GATEWAY_URL || true
-}
-
-default_binary_base_url() {
-    if [[ -n "${IGRIS_BINARY_BASE_URL:-}" ]]; then
-        return
-    fi
-
-    local gateway_url
-    gateway_url="$(resolve_gateway_url)"
-    if [[ -z "$gateway_url" ]]; then
-        return
-    fi
-
-    IGRIS_BINARY_BASE_URL="${gateway_url%/}/dist"
-    export IGRIS_BINARY_BASE_URL
 }
 
 resolve_agent_token() {
@@ -585,21 +571,23 @@ gh_download_file() {
 get_latest_version() {
     local latest
     local tag
+    local candidate
 
-    # NOTE: do NOT use /releases/latest. ${REPO} publishes BOTH the Halo Gateway
-    # (tag gateway-vX.Y.Z) and the Igris agent (tag vX.Y.Z); /releases/latest
-    # returns the newest release across the WHOLE repo, which is usually a gateway
-    # release — yielding a version with no matching igris asset. Instead, list
-    # releases and pick the newest tag in the Igris scheme (vMAJOR.MINOR.PATCH).
-    tag=$(gh_api_get "https://api.github.com/repos/${REPO}/releases?per_page=100" 2>/dev/null \
+    # Do not trust /releases/latest here. The public installer release repo has
+    # historically marked newer-created but lower-semver tags as Latest. List
+    # releases and choose the highest vMAJOR.MINOR.PATCH tag instead.
+    while IFS= read -r tag; do
+        candidate="$(normalize_version "$tag")"
+        if [[ -z "$latest" || "$(compare_versions "$latest" "$candidate")" == "lt" ]]; then
+            latest="$candidate"
+        fi
+    done < <(gh_api_get "https://api.github.com/repos/${REPO}/releases?per_page=100" 2>/dev/null \
         | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' \
-        | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)".*/\1/' \
-        | head -n1 || echo "")
-    latest="$(normalize_version "${tag:-}")"
+        | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)".*/\1/' || true)
 
     if [[ -z "$latest" ]]; then
         if [[ -z "$GITHUB_TOKEN_VALUE" ]]; then
-            warn "Could not resolve the latest Igris version — ${REPO} is private and no token was provided (set IGRIS_GITHUB_TOKEN / GITHUB_TOKEN). Falling back to default: ${VERSION}"
+            warn "Could not resolve the latest Igris version from ${REPO}. Falling back to default: ${VERSION}"
         else
             warn "Could not resolve the latest Igris version from ${REPO} (check the token's access). Falling back to default: ${VERSION}"
         fi
@@ -691,10 +679,8 @@ download_binary() {
         if ! gh_download_file "$url" "${tmp_dir}/${filename}"; then
             if [[ -z "$GITHUB_TOKEN_VALUE" ]]; then
                 error "Failed to download ${url}
-  ${REPO} is a PRIVATE repository, so GitHub returns 404 for unauthenticated downloads.
-  Fix: set a token with repo:read access and re-run, e.g.
-      IGRIS_GITHUB_TOKEN=<token> curl -fsSL <installer> | bash
-  or install from an artifact server instead by setting IGRIS_BINARY_BASE_URL."
+  Verify release ${tag} exists in ${REPO} and contains ${filename}.
+  For explicit artifact-server installs, set IGRIS_BINARY_BASE_URL."
             else
                 error "Failed to download ${url}
   A token was provided but the download failed — verify the token has access to ${REPO}
@@ -1303,13 +1289,11 @@ main() {
     local platform
     platform=$(detect_platform)
     info "Detected platform: ${platform}"
-
-    default_binary_base_url
     
     # Get version
-    if [[ -n "${IGRIS_BINARY_BASE_URL:-}" && -z "${IGRIS_VERSION:-}" ]]; then
+    if [[ -n "${IGRIS_BINARY_BASE_URL:-}" && -z "$REQUESTED_VERSION" ]]; then
         VERSION="local"
-    elif [[ -z "${IGRIS_VERSION:-}" ]]; then
+    elif [[ -z "$REQUESTED_VERSION" ]]; then
         VERSION=$(get_latest_version)
     fi
     info "Version: ${VERSION}"

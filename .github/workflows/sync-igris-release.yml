@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Halo release tag (e.g., v0.6.1). Leave empty for latest."
+        description: "Halo release tag to sync (e.g., v1.6.3). Required unless repository_dispatch supplies one."
         required: false
         type: string
   repository_dispatch:
@@ -101,10 +101,13 @@ jobs:
             [[ -n "$dispatch_tag" ]] && tag="$dispatch_tag"
           fi
 
-          # Fall back to latest release
+          # Do not infer a default here. The halo repo has multiple historical
+          # Igris version lines; GitHub's latest label can regress the public
+          # installer, while highest semver can select an old legacy-line build.
+          # Public releases must be synced from an explicit, intentional tag.
           if [[ -z "$tag" ]]; then
-            echo "No tag specified, fetching latest release from PipeOpsHQ/halo..."
-            tag=$(gh release view --repo PipeOpsHQ/halo --json tagName --jq '.tagName')
+            echo "::error::No Halo release tag supplied. Run this workflow with an explicit tag such as v1.6.3."
+            exit 1
           fi
 
           echo "Resolved tag: ${tag}"
@@ -204,11 +207,21 @@ jobs:
             exit 1
           fi
 
-          # The VERSION= line in halo's repo lags the release until the
-          # update-install-script job in halo-gateway runs. Force-set it
-          # here so the CDN copy is always pinned to the release we just
-          # published, regardless of when halo's own bumper ran.
-          sed -i "s/^VERSION=\".*\"/VERSION=\"${version}\"/" igris.sh.new
+          # The VERSION fallback in halo's repo can lag the release until the
+          # update-install-script job in halo-gateway runs. Force-set only the
+          # fallback so explicit IGRIS_VERSION requests still bypass discovery.
+          awk -v version="${version}" '
+            /^VERSION="\$\{REQUESTED_VERSION:-/ {
+              print "VERSION=\"${REQUESTED_VERSION:-" version "}\""
+              next
+            }
+            /^VERSION="/ {
+              print "VERSION=\"" version "\""
+              next
+            }
+            { print }
+          ' igris.sh.new > igris.sh.tmp
+          mv igris.sh.tmp igris.sh.new
 
           chmod +x igris.sh.new
           mv igris.sh.new igris.sh

@@ -11,7 +11,7 @@ Adjust variables in the scripts to match your release assets and binary naming.
 
 ## Files
 
-- `igris.sh` — Installs the Igris Security Agent from GitHub Releases (auto-detects OS/arch, optional systemd setup).
+- `igris.sh` — Installs the Igris Security Agent from public `PipeOpsHQ/pipeops-installer` GitHub Releases (auto-detects OS/arch, optional service setup).
 - `cli.sh` — Installs the PipeOps CLI from GitHub Releases (auto-detects OS/arch).
 - `k8-install.sh` — Delegates to the upstream cluster/agent installer (`scripts/install.sh`).
 - `agent.sh` — Alias wrapper to `k8-install.sh` for convenience.
@@ -76,6 +76,21 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
   - Optional: set `VERSION=v1.2.3` to pin to a specific release.
   - Optional: replace `k8-agent.yaml` in this repo and set `MANIFEST_URL=https://get.pipeops.dev/k8-agent.yaml` for a domain-stable manifest.
 
+- `igris.sh` variables:
+  - `IGRIS_RELEASE_REPO` defaults to `PipeOpsHQ/pipeops-installer`.
+  - The latest version is the highest `vMAJOR.MINOR.PATCH` release in that repo, not GitHub's `latest` label.
+  - Optional: set `IGRIS_VERSION=1.6.3` to pin to a specific Igris release.
+  - Optional: set `IGRIS_BINARY_BASE_URL` only for explicit raw/self-hosted artifact installs.
+
+## Publish Igris releases
+
+`get.pipeops.dev/igris.sh` installs from this repo's public Igris releases. To
+publish a new public Igris version, first create the matching Igris release in
+`PipeOpsHQ/halo`, then run the **Sync Igris Agent Release** workflow here with
+that exact tag, for example `v1.6.3`. Do not run the sync without a tag: halo has
+multiple historical version lines, so automatic "latest" selection can publish
+the wrong public version.
+
 ## Usage
 
 ### Igris Security Agent
@@ -96,7 +111,7 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
 - Install a specific version:
 
   ```sh
-  VERSION=1.0.0 curl -fsSL https://get.pipeops.dev/igris.sh | bash
+  IGRIS_VERSION=1.6.3 curl -fsSL https://get.pipeops.dev/igris.sh | bash
   ```
 
 - Run manually after install:
