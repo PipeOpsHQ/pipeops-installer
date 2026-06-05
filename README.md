@@ -82,6 +82,15 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
   - Optional: set `IGRIS_VERSION=1.6.3` to pin to a specific Igris release.
   - Optional: set `IGRIS_BINARY_BASE_URL` only for explicit raw/self-hosted artifact installs.
 
+## Publish Igris releases
+
+`get.pipeops.dev/igris.sh` installs from this repo's public Igris releases. To
+publish a new public Igris version, first create the matching Igris release in
+`PipeOpsHQ/halo`, then run the **Sync Igris Agent Release** workflow here with
+that exact tag, for example `v1.6.3`. Do not run the sync without a tag: halo has
+multiple historical version lines, so automatic "latest" selection can publish
+the wrong public version.
+
 ## Usage
 
 ### Igris Security Agent
