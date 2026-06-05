@@ -8,23 +8,38 @@
 #   IGRIS_INSTALL_DIR  - Installation directory (default: /usr/local/bin)
 #   IGRIS_GATEWAY_URL  - Halo Gateway URL (alias: GATEWAY_URL)
 #   IGRIS_AGENT_TOKEN  - Agent bootstrap JWT or API key (aliases: IGRIS_TOKEN, TOKEN)
-#   IGRIS_WORKSPACE_ID - Workspace ID or UUID (alias: WORKSPACE_ID)
-#   IGRIS_TENANT_ID    - Optional tenant ID or UUID (alias: TENANT_ID)
-#   IGRIS_ORG_ID       - Optional organisation ID or UUID (alias: ORG_ID)
+#   IGRIS_WORKSPACE_ID - Optional workspace ID/UUID override (alias: WORKSPACE_ID)
 #   IGRIS_MODE         - Deployment mode / agent type (alias: MODE)
 #   IGRIS_BINARY_BASE_URL - Optional base URL for raw test binaries named igris-<os>-<arch>[.exe]
+#   IGRIS_GITHUB_TOKEN - GitHub token (repo:read) for the PRIVATE release repo
+#                        (aliases: GITHUB_TOKEN, GH_TOKEN). Required to install
+#                        from GitHub releases; unauthenticated requests 404.
 #
 
 set -euo pipefail
 
+# Minimal/root containers may not include sudo. Keep the existing sudo-based
+# installer paths working when the script is already running as root.
+if [[ "$(id -u)" -eq 0 ]] && ! command -v sudo >/dev/null 2>&1; then
+    sudo() {
+        "$@"
+    }
+fi
+
 # ─── Configuration ───────────────────────────────────────────────────────────
-VERSION="0.69.0"
+VERSION="0.79.1"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
 REPO="PipeOpsHQ/halo"
 GITHUB_URL="https://github.com/${REPO}"
 RELEASES_URL="${GITHUB_URL}/releases"
 IGRIS_SERVICE_STARTED="false"
+
+# GitHub auth. The Igris release assets live in the PRIVATE repo ${REPO}, so the
+# releases API and asset downloads return HTTP 404 to UNAUTHENTICATED requests.
+# Supply a token (repo:read) via any of these env vars to install from GitHub;
+# otherwise use IGRIS_BINARY_BASE_URL to install from an artifact server instead.
+GITHUB_TOKEN_VALUE="${IGRIS_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
 
 # Colors for output
 RED=$'\033[0;31m'
@@ -51,6 +66,23 @@ error() {
     exit 1
 }
 
+ensure_sudo_available() {
+    local reason="${1:-perform privileged installation steps}"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        return
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        error "sudo is required to ${reason}, but sudo is not installed."
+    fi
+
+    info "Requesting sudo access to ${reason}..."
+    if ! sudo -v; then
+        error "sudo authentication failed; cannot ${reason}."
+    fi
+}
+
 get_first_env() {
     local key value
 
@@ -69,8 +101,43 @@ resolve_gateway_url() {
     get_first_env IGRIS_GATEWAY_URL GATEWAY_URL || true
 }
 
+default_binary_base_url() {
+    if [[ -n "${IGRIS_BINARY_BASE_URL:-}" ]]; then
+        return
+    fi
+
+    local gateway_url
+    gateway_url="$(resolve_gateway_url)"
+    if [[ -z "$gateway_url" ]]; then
+        return
+    fi
+
+    IGRIS_BINARY_BASE_URL="${gateway_url%/}/dist"
+    export IGRIS_BINARY_BASE_URL
+}
+
 resolve_agent_token() {
     get_first_env IGRIS_AGENT_TOKEN IGRIS_TOKEN TOKEN || true
+}
+
+allow_insecure_http() {
+    case "${IGRIS_ALLOW_INSECURE_HTTP:-}" in
+        1|true|TRUE|True|yes|YES|Yes)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+refuse_insecure_artifact_token() {
+    local url="$1"
+    local token="$2"
+
+    if [[ -n "$token" && "$url" == http://* ]] && ! allow_insecure_http; then
+        error "Refusing to send TOKEN over plain HTTP to ${url}. Use HTTPS or set IGRIS_ALLOW_INSECURE_HTTP=1 for local testing."
+    fi
 }
 
 resolve_workspace_id() {
@@ -205,7 +272,6 @@ missing_service_requirements() {
 
     [[ -z "$(resolve_gateway_url)" ]] && missing+=("GATEWAY_URL/IGRIS_GATEWAY_URL")
     [[ -z "$(resolve_agent_token)" ]] && missing+=("TOKEN/IGRIS_AGENT_TOKEN")
-    [[ -z "$(resolve_workspace_id)" ]] && missing+=("WORKSPACE_ID/IGRIS_WORKSPACE_ID")
 
     printf '%s' "${missing[*]:-}"
 }
@@ -220,19 +286,19 @@ write_agent_env_file() {
     local mode="$7"
     local tmp_file
 
-    sudo mkdir -p "$(dirname "$env_file")"
+    sudo mkdir -p "$(dirname "$env_file")" || error "Failed to create directory for ${env_file}."
     tmp_file="$(mktemp)"
     chmod 600 "$tmp_file"
     {
         printf 'IGRIS_GATEWAY_URL=%s\n' "$gateway_url"
         printf 'IGRIS_AGENT_TOKEN=%s\n' "$token"
-        printf 'IGRIS_WORKSPACE_ID=%s\n' "$workspace_id"
+        [[ -n "$workspace_id" ]] && printf 'IGRIS_WORKSPACE_ID=%s\n' "$workspace_id"
         [[ -n "$tenant_id" ]] && printf 'IGRIS_TENANT_ID=%s\n' "$tenant_id"
         [[ -n "$org_id" ]] && printf 'IGRIS_ORG_ID=%s\n' "$org_id"
         printf 'IGRIS_MODE=%s\n' "$mode"
     } > "$tmp_file"
-    sudo sh -c 'umask 077; cat "$1" > "$2"' sh "$tmp_file" "$env_file"
-    sudo chmod 600 "$env_file"
+    sudo sh -c 'umask 077; cat "$1" > "$2"' sh "$tmp_file" "$env_file" || error "Failed to write ${env_file}."
+    sudo chmod 600 "$env_file" || error "Failed to secure ${env_file}."
     rm -f "$tmp_file"
 }
 
@@ -472,20 +538,71 @@ sha256_file() {
     fi
 }
 
+# ─── GitHub HTTP helpers (token-aware) ───────────────────────────────────────
+# gh_api_get URL — GET a GitHub API URL to stdout, sending the auth token when
+# set. Returns curl/wget's exit status.
+gh_api_get() {
+    local url="$1"
+    if command -v curl &> /dev/null; then
+        if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
+            curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN_VALUE}" -H "Accept: application/vnd.github+json" "$url"
+        else
+            curl -fsSL -H "Accept: application/vnd.github+json" "$url"
+        fi
+    elif command -v wget &> /dev/null; then
+        if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
+            wget -qO- --header="Authorization: Bearer ${GITHUB_TOKEN_VALUE}" --header="Accept: application/vnd.github+json" "$url"
+        else
+            wget -qO- --header="Accept: application/vnd.github+json" "$url"
+        fi
+    fi
+}
+
+# gh_download_file URL OUT — download a release asset to OUT, sending the auth
+# token when set. With curl the Authorization header is dropped on the cross-host
+# redirect to the signed object URL (curl's default), so private assets download
+# cleanly. Returns the downloader's exit status (caller handles failure).
+gh_download_file() {
+    local url="$1" out="$2"
+    if command -v curl &> /dev/null; then
+        if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
+            curl -fL -H "Authorization: Bearer ${GITHUB_TOKEN_VALUE}" -H "Accept: application/octet-stream" -o "$out" "$url"
+        else
+            curl -fsSL -o "$out" "$url"
+        fi
+    elif command -v wget &> /dev/null; then
+        if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
+            wget -q --header="Authorization: Bearer ${GITHUB_TOKEN_VALUE}" --header="Accept: application/octet-stream" -O "$out" "$url"
+        else
+            wget -q -O "$out" "$url"
+        fi
+    else
+        error "Neither curl nor wget found. Please install one of them."
+    fi
+}
+
 # ─── Get Latest Version ──────────────────────────────────────────────────────
 get_latest_version() {
     local latest
     local tag
-    
-    if command -v curl &> /dev/null; then
-        tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || echo "")
-    elif command -v wget &> /dev/null; then
-        tag=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || echo "")
-    fi
+
+    # NOTE: do NOT use /releases/latest. ${REPO} publishes BOTH the Halo Gateway
+    # (tag gateway-vX.Y.Z) and the Igris agent (tag vX.Y.Z); /releases/latest
+    # returns the newest release across the WHOLE repo, which is usually a gateway
+    # release — yielding a version with no matching igris asset. Instead, list
+    # releases and pick the newest tag in the Igris scheme (vMAJOR.MINOR.PATCH).
+    tag=$(gh_api_get "https://api.github.com/repos/${REPO}/releases?per_page=100" 2>/dev/null \
+        | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' \
+        | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)".*/\1/' \
+        | head -n1 || echo "")
     latest="$(normalize_version "${tag:-}")"
 
     if [[ -z "$latest" ]]; then
-        warn "Could not fetch latest version, using default: ${VERSION}"
+        if [[ -z "$GITHUB_TOKEN_VALUE" ]]; then
+            warn "Could not resolve the latest Igris version — ${REPO} is private and no token was provided (set IGRIS_GITHUB_TOKEN / GITHUB_TOKEN). Falling back to default: ${VERSION}"
+        else
+            warn "Could not resolve the latest Igris version from ${REPO} (check the token's access). Falling back to default: ${VERSION}"
+        fi
         echo "$VERSION"
     else
         echo "$latest"
@@ -507,18 +624,48 @@ download_binary() {
         local raw_base="${IGRIS_BINARY_BASE_URL%/}"
         local raw_binary="${BINARY_NAME}-${platform}${ext}"
         local raw_url="${raw_base}/${raw_binary}"
+        local raw_checksum_url="${raw_base}/checksums.txt"
+        local agent_token
         local tmp_dir
+        agent_token="$(resolve_agent_token)"
+        refuse_insecure_artifact_token "$raw_base" "$agent_token"
         tmp_dir=$(mktemp -d)
         trap "rm -rf ${tmp_dir}" EXIT
 
-        info "Downloading local Igris Agent build for ${platform}..."
+        info "Downloading Igris Agent build for ${platform} from artifact server..."
         if command -v curl &> /dev/null; then
-            curl -fsSL -o "${tmp_dir}/${raw_binary}" "$raw_url" || error "Failed to download: $raw_url"
+            if [[ -n "$agent_token" ]]; then
+                curl -fsSL -H "Authorization: Bearer ${agent_token}" -o "${tmp_dir}/${raw_binary}" "$raw_url" || error "Failed to download: $raw_url"
+                curl -fsSL -H "Authorization: Bearer ${agent_token}" -o "${tmp_dir}/checksums.txt" "$raw_checksum_url" || error "Failed to download checksum manifest: $raw_checksum_url"
+            else
+                curl -fsSL -o "${tmp_dir}/${raw_binary}" "$raw_url" || error "Failed to download: $raw_url"
+                curl -fsSL -o "${tmp_dir}/checksums.txt" "$raw_checksum_url" || error "Failed to download checksum manifest: $raw_checksum_url"
+            fi
         elif command -v wget &> /dev/null; then
-            wget -q -O "${tmp_dir}/${raw_binary}" "$raw_url" || error "Failed to download: $raw_url"
+            if [[ -n "$agent_token" ]]; then
+                wget -q --header="Authorization: Bearer ${agent_token}" -O "${tmp_dir}/${raw_binary}" "$raw_url" || error "Failed to download: $raw_url"
+                wget -q --header="Authorization: Bearer ${agent_token}" -O "${tmp_dir}/checksums.txt" "$raw_checksum_url" || error "Failed to download checksum manifest: $raw_checksum_url"
+            else
+                wget -q -O "${tmp_dir}/${raw_binary}" "$raw_url" || error "Failed to download: $raw_url"
+                wget -q -O "${tmp_dir}/checksums.txt" "$raw_checksum_url" || error "Failed to download checksum manifest: $raw_checksum_url"
+            fi
         else
             error "Neither curl nor wget found. Please install one of them."
         fi
+
+        cd "${tmp_dir}"
+        info "Verifying checksum..."
+        local expected_sum
+        expected_sum=$(awk -v f="$raw_binary" '($2 == f || $2 == "*" f) {print $1; exit}' checksums.txt)
+        if [[ -z "$expected_sum" ]]; then
+            error "Checksum entry for ${raw_binary} not found in ${raw_checksum_url}"
+        fi
+        local actual_sum
+        actual_sum=$(sha256_file "$raw_binary")
+        if [[ "$expected_sum" != "$actual_sum" ]]; then
+            error "Checksum verification failed!"
+        fi
+        success "Checksum verified"
 
         local target="${INSTALL_DIR}/${BINARY_NAME}${ext}"
         info "Installing to ${target}..."
@@ -539,13 +686,22 @@ download_binary() {
     trap "rm -rf ${tmp_dir}" EXIT
     
     info "Downloading Igris Agent v${version} for ${platform}..."
-    
-    if command -v curl &> /dev/null; then
-        curl -fsSL -o "${tmp_dir}/${filename}" "$url" || error "Failed to download: $url"
-        curl -fsSL -o "${tmp_dir}/checksums.txt" "$checksum_url" 2>/dev/null || warn "Checksum file not available"
-    elif command -v wget &> /dev/null; then
-        wget -q -O "${tmp_dir}/${filename}" "$url" || error "Failed to download: $url"
-        wget -q -O "${tmp_dir}/checksums.txt" "$checksum_url" 2>/dev/null || warn "Checksum file not available"
+
+    if command -v curl &> /dev/null || command -v wget &> /dev/null; then
+        if ! gh_download_file "$url" "${tmp_dir}/${filename}"; then
+            if [[ -z "$GITHUB_TOKEN_VALUE" ]]; then
+                error "Failed to download ${url}
+  ${REPO} is a PRIVATE repository, so GitHub returns 404 for unauthenticated downloads.
+  Fix: set a token with repo:read access and re-run, e.g.
+      IGRIS_GITHUB_TOKEN=<token> curl -fsSL <installer> | bash
+  or install from an artifact server instead by setting IGRIS_BINARY_BASE_URL."
+            else
+                error "Failed to download ${url}
+  A token was provided but the download failed — verify the token has access to ${REPO}
+  and that release ${tag} contains ${filename}."
+            fi
+        fi
+        gh_download_file "$checksum_url" "${tmp_dir}/checksums.txt" 2>/dev/null || warn "Checksum file not available"
     else
         error "Neither curl nor wget found. Please install one of them."
     fi
@@ -620,21 +776,21 @@ create_systemd_service() {
         missing="$(missing_service_requirements)"
         if [[ -n "$missing" ]]; then
             warn "Skipping systemd service setup: missing required env vars: ${missing}"
-            info "Set GATEWAY_URL/TOKEN/WORKSPACE_ID (or IGRIS_* equivalents) to auto-configure the service."
+            info "Set GATEWAY_URL/TOKEN (or IGRIS_* equivalents) to auto-configure the service."
             return
         fi
     fi
 
-    if [[ -z "$gateway_url" ]]; then
+    if [[ -z "$gateway_url" && "$auto_config" != "true" ]]; then
         read -p "Enter Halo Gateway URL (e.g., https://halo.example.com): " gateway_url
     fi
 
-    if [[ -z "$token" ]]; then
+    if [[ -z "$token" && "$auto_config" != "true" ]]; then
         read -p "Enter Agent Enrollment Token: " token
     fi
 
-    if [[ -z "$workspace_id" ]]; then
-        read -p "Enter Workspace ID or UUID: " workspace_id
+    if [[ -z "$workspace_id" && "$auto_config" != "true" ]]; then
+        read -p "Enter Workspace ID or UUID (optional for agent-install service keys): " workspace_id
     fi
 
     if [[ -z "$requested_mode" && "$auto_config" == "true" ]]; then
@@ -750,21 +906,21 @@ create_openrc_service() {
         missing="$(missing_service_requirements)"
         if [[ -n "$missing" ]]; then
             warn "Skipping OpenRC service setup: missing required env vars: ${missing}"
-            info "Set GATEWAY_URL/TOKEN/WORKSPACE_ID (or IGRIS_* equivalents) to auto-configure the service."
+            info "Set GATEWAY_URL/TOKEN (or IGRIS_* equivalents) to auto-configure the service."
             return
         fi
     fi
 
-    if [[ -z "$gateway_url" ]]; then
+    if [[ -z "$gateway_url" && "$auto_config" != "true" ]]; then
         read -p "Enter Halo Gateway URL (e.g., https://halo.example.com): " gateway_url
     fi
 
-    if [[ -z "$token" ]]; then
+    if [[ -z "$token" && "$auto_config" != "true" ]]; then
         read -p "Enter Agent Enrollment Token: " token
     fi
 
-    if [[ -z "$workspace_id" ]]; then
-        read -p "Enter Workspace ID or UUID: " workspace_id
+    if [[ -z "$workspace_id" && "$auto_config" != "true" ]]; then
+        read -p "Enter Workspace ID or UUID (optional for agent-install service keys): " workspace_id
     fi
 
     if [[ -z "$requested_mode" && "$auto_config" == "true" ]]; then
@@ -856,21 +1012,21 @@ create_launchd_service() {
         missing="$(missing_service_requirements)"
         if [[ -n "$missing" ]]; then
             warn "Skipping launchd setup: missing required env vars: ${missing}"
-            info "Set GATEWAY_URL/TOKEN/WORKSPACE_ID (or IGRIS_* equivalents) to auto-configure the daemon."
+            info "Set GATEWAY_URL/TOKEN (or IGRIS_* equivalents) to auto-configure the daemon."
             return
         fi
     fi
 
-    if [[ -z "$gateway_url" ]]; then
+    if [[ -z "$gateway_url" && "$auto_config" != "true" ]]; then
         read -p "Enter Halo Gateway URL (e.g., https://halo.example.com): " gateway_url
     fi
 
-    if [[ -z "$token" ]]; then
+    if [[ -z "$token" && "$auto_config" != "true" ]]; then
         read -p "Enter Agent Enrollment Token: " token
     fi
 
-    if [[ -z "$workspace_id" ]]; then
-        read -p "Enter Workspace ID or UUID: " workspace_id
+    if [[ -z "$workspace_id" && "$auto_config" != "true" ]]; then
+        read -p "Enter Workspace ID or UUID (optional for agent-install service keys): " workspace_id
     fi
 
     if [[ -z "$requested_mode" && "$auto_config" == "true" ]]; then
@@ -885,15 +1041,17 @@ create_launchd_service() {
     local env_file="/Library/Application Support/Igris/igris.env"
     local plist_file="/Library/LaunchDaemons/com.pipeops.igris.plist"
 
+    ensure_sudo_available "install Igris as a macOS launchd daemon"
+
     info "Writing agent environment to ${env_file}..."
     write_agent_env_file "$env_file" "$gateway_url" "$token" "$workspace_id" "$tenant_id" "$org_id" "$mode"
 
     info "Creating launchd daemon..."
-    sudo mkdir -p /var/lib/igris /var/log/igris
-    sudo chmod 700 /var/lib/igris
-    sudo chmod 755 /var/log/igris
+    sudo mkdir -p /var/lib/igris /var/log/igris || error "Failed to create Igris runtime directories."
+    sudo chmod 700 /var/lib/igris || error "Failed to secure /var/lib/igris."
+    sudo chmod 755 /var/log/igris || error "Failed to secure /var/log/igris."
 
-    sudo tee "$plist_file" > /dev/null << EOF
+    if ! sudo tee "$plist_file" > /dev/null << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -929,8 +1087,11 @@ create_launchd_service() {
 </dict>
 </plist>
 EOF
-    sudo chown root:wheel "$plist_file"
-    sudo chmod 644 "$plist_file"
+    then
+        error "Failed to write ${plist_file}."
+    fi
+    sudo chown root:wheel "$plist_file" || error "Failed to set owner on ${plist_file}."
+    sudo chmod 644 "$plist_file" || error "Failed to set permissions on ${plist_file}."
 
     sudo launchctl bootout system "$plist_file" >/dev/null 2>&1 || true
     local launchctl_output
@@ -959,21 +1120,17 @@ ${GREEN}Igris Agent installed successfully!${NC}
 ${BLUE}Quick Start:${NC}
   export IGRIS_GATEWAY_URL=https://your-halo-gateway.com
   export IGRIS_AGENT_TOKEN=YOUR_TOKEN
-  export IGRIS_WORKSPACE_ID=<workspace-uuid>
   ${BINARY_NAME}
 
 ${BLUE}Shorthand Aliases:${NC}
   GATEWAY_URL / IGRIS_GATEWAY_URL
   TOKEN / IGRIS_AGENT_TOKEN
-  WORKSPACE_ID / IGRIS_WORKSPACE_ID
-  TENANT_ID / IGRIS_TENANT_ID (optional)
-  ORG_ID / IGRIS_ORG_ID (optional)
+  WORKSPACE_ID / IGRIS_WORKSPACE_ID (optional workspace override)
   MODE / IGRIS_MODE
 
 ${BLUE}Examples:${NC}
   # Basic enrollment
-  GATEWAY_URL=https://halo.example.com TOKEN=<bootstrap-jwt-or-api-key> \
-  WORKSPACE_ID=<workspace-uuid> ${BINARY_NAME}
+  GATEWAY_URL=https://halo.example.com TOKEN=<agent-install-service-key> ${BINARY_NAME}
 
   # Agent-type aliases are normalized automatically
   GATEWAY_URL=https://halo.example.com TOKEN=<bootstrap-jwt-or-api-key> \
@@ -981,8 +1138,7 @@ ${BLUE}Examples:${NC}
 
   # Install + auto-configure a systemd/launchd service from the one-liner
   curl -fsSL https://get.pipeops.dev/igris.sh | \
-    GATEWAY_URL=https://halo.example.com TOKEN=<bootstrap-jwt-or-api-key> \
-    WORKSPACE_ID=<workspace-uuid> MODE=host bash
+    GATEWAY_URL=https://halo.example.com TOKEN=<agent-install-service-key> MODE=host bash
 
 ${BLUE}Documentation:${NC}
   ${GITHUB_URL}
@@ -1032,7 +1188,7 @@ create_daemonized_runtime() {
         missing="$(missing_service_requirements)"
         if [[ -n "$missing" ]]; then
             warn "Skipping daemonized runtime: missing required env vars: ${missing}"
-            info "Set GATEWAY_URL/TOKEN/WORKSPACE_ID (or IGRIS_* equivalents) to auto-start the daemon."
+            info "Set GATEWAY_URL/TOKEN (or IGRIS_* equivalents) to auto-start the daemon."
             return
         fi
     fi
@@ -1147,6 +1303,8 @@ main() {
     local platform
     platform=$(detect_platform)
     info "Detected platform: ${platform}"
+
+    default_binary_base_url
     
     # Get version
     if [[ -n "${IGRIS_BINARY_BASE_URL:-}" && -z "${IGRIS_VERSION:-}" ]]; then
@@ -1231,11 +1389,15 @@ main() {
         # Download and install
         download_binary "$platform" "$VERSION"
     else
-        # Up-to-date path: exit cleanly without touching the service config
-        # or re-running create_*_service (which would needlessly bounce
-        # a healthy daemon and re-prompt the operator for env vars).
-        info "No changes made — re-run with IGRIS_VERSION=<x.y.z> to force a specific version."
-        exit 0
+        if has_bootstrap_env; then
+            info "Igris binary is already installed; ensuring the background service is configured."
+        else
+            # Up-to-date path: exit cleanly without touching the service config
+            # or re-running create_*_service (which would needlessly bounce
+            # a healthy daemon and re-prompt the operator for env vars).
+            info "No changes made — re-run with IGRIS_VERSION=<x.y.z> to force a specific version."
+            exit 0
+        fi
     fi
 
     # Verify installation
@@ -1282,6 +1444,7 @@ main() {
             warn "Igris binary was installed, but it could not be started in the background on this host."
             warn "No supported service manager (systemd, OpenRC, launchd) and --daemon mode also failed."
             warn "Inspect /var/log/igris/igris.log (if present) or run '${INSTALL_DIR}/${BINARY_NAME}' directly to see startup errors."
+            exit 1
         fi
     fi
     
