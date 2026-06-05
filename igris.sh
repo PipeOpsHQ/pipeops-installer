@@ -571,7 +571,7 @@ gh_download_file() {
 
 # ─── Get Latest Version ──────────────────────────────────────────────────────
 get_latest_version() {
-    local latest
+    local latest=""
     local tag
     local candidate
 
