@@ -29,7 +29,9 @@ fi
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 REQUESTED_VERSION="${IGRIS_VERSION:-}"
-VERSION="${REQUESTED_VERSION:-0.79.1}"
+# Used only when public release discovery fails. Keep this pinned to a published
+# PipeOpsHQ/pipeops-installer release with GoReleaser assets and checksums.txt.
+VERSION="1.6.3"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
 REPO="${IGRIS_RELEASE_REPO:-PipeOpsHQ/pipeops-installer}"
@@ -687,7 +689,7 @@ download_binary() {
   and that release ${tag} contains ${filename}."
             fi
         fi
-        gh_download_file "$checksum_url" "${tmp_dir}/checksums.txt" 2>/dev/null || warn "Checksum file not available"
+        gh_download_file "$checksum_url" "${tmp_dir}/checksums.txt" 2>/dev/null || error "Failed to download checksum manifest: $checksum_url"
     else
         error "Neither curl nor wget found. Please install one of them."
     fi
@@ -695,20 +697,19 @@ download_binary() {
     cd "${tmp_dir}"
 
     # Verify the downloaded release archive against GoReleaser's checksums.txt.
-    if [[ -s "checksums.txt" ]]; then
-        info "Verifying checksum..."
-        local expected_sum
-        expected_sum=$(awk -v f="$filename" '($2 == f || $2 == "*" f) {print $1; exit}' checksums.txt)
-        local actual_sum
-        actual_sum=$(sha256_file "$filename")
-        
-        if [[ -z "$expected_sum" ]]; then
-            warn "Checksum entry for ${filename} not found"
-        elif [[ "$expected_sum" != "$actual_sum" ]]; then
-            error "Checksum verification failed!"
-        else
-            success "Checksum verified"
-        fi
+    info "Verifying checksum..."
+    local expected_sum
+    expected_sum=$(awk -v f="$filename" '($2 == f || $2 == "*" f) {print $1; exit}' checksums.txt)
+    if [[ -z "$expected_sum" ]]; then
+        error "Checksum entry for ${filename} not found in ${checksum_url}"
+    fi
+    local actual_sum
+    actual_sum=$(sha256_file "$filename")
+
+    if [[ "$expected_sum" != "$actual_sum" ]]; then
+        error "Checksum verification failed!"
+    else
+        success "Checksum verified"
     fi
 
     if [[ "$platform" == windows-* ]]; then
