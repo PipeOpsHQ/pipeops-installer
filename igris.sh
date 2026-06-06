@@ -599,6 +599,79 @@ get_latest_version() {
     fi
 }
 
+run_with_timeout() {
+    local timeout_seconds="$1"
+    shift
+
+    local stdout_file stderr_file timed_out_file
+    local command_pid watcher_pid rc
+    stdout_file="$(mktemp)"
+    stderr_file="$(mktemp)"
+    timed_out_file="$(mktemp)"
+    rm -f "$timed_out_file"
+
+    "$@" >"$stdout_file" 2>"$stderr_file" &
+    command_pid="$!"
+
+    (
+        sleep "$timeout_seconds"
+        if kill -0 "$command_pid" 2>/dev/null; then
+            : > "$timed_out_file"
+            kill "$command_pid" 2>/dev/null || true
+            sleep 1
+            kill -9 "$command_pid" 2>/dev/null || true
+        fi
+    ) &
+    watcher_pid="$!"
+
+    set +e
+    wait "$command_pid"
+    rc="$?"
+    set -e
+
+    kill "$watcher_pid" 2>/dev/null || true
+    wait "$watcher_pid" 2>/dev/null || true
+
+    cat "$stdout_file"
+    cat "$stderr_file" >&2
+
+    if [[ -f "$timed_out_file" ]]; then
+        rc=124
+    fi
+
+    rm -f "$stdout_file" "$stderr_file" "$timed_out_file"
+    return "$rc"
+}
+
+detect_installed_version() {
+    local timeout_seconds="${1:-5}"
+    local version_output
+    local version_status
+    local parsed_version
+
+    if ! command -v "$BINARY_NAME" &> /dev/null; then
+        echo "unknown"
+        return 0
+    fi
+
+    set +e
+    version_output="$(run_with_timeout "$timeout_seconds" "$BINARY_NAME" --version 2>/dev/null)"
+    version_status="$?"
+    set -e
+
+    if [[ "$version_status" -ne 0 ]]; then
+        echo "unknown"
+        return 0
+    fi
+
+    parsed_version="$(printf '%s\n' "$version_output" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+    if [[ -z "$parsed_version" ]]; then
+        echo "unknown"
+    else
+        echo "$parsed_version"
+    fi
+}
+
 # ─── Download Binary ─────────────────────────────────────────────────────────
 download_binary() {
     local platform="$1"
@@ -1305,7 +1378,7 @@ main() {
     local update_action=""   # "install" | "upgrade" | "downgrade" | "reinstall" | "skip"
     if command -v "$BINARY_NAME" &> /dev/null; then
         local current_version
-        current_version=$("$BINARY_NAME" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+        current_version="$(detect_installed_version 5)"
         local target_version="${VERSION#v}"
         target_version="${target_version#agent-}"
 
@@ -1388,8 +1461,12 @@ main() {
     # Verify installation
     if command -v "$BINARY_NAME" &> /dev/null; then
         local installed_version
-        installed_version=$("$BINARY_NAME" --version 2>/dev/null || echo "installed")
-        success "Verified: ${BINARY_NAME} ${installed_version}"
+        installed_version="$(detect_installed_version 5)"
+        if [[ "$installed_version" == "unknown" ]]; then
+            success "Verified: ${BINARY_NAME} installed"
+        else
+            success "Verified: ${BINARY_NAME} ${installed_version}"
+        fi
     fi
 
     # On the upgrade path the binary has been replaced in place. If a
