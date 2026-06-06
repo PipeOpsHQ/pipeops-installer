@@ -15,6 +15,8 @@
 #                        (default: PipeOpsHQ/pipeops-installer)
 #   IGRIS_GITHUB_TOKEN - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
 #                        for private release repo overrides or rate limits.
+#   IGRIS_RESET_STATE  - Set to 1/true to remove persisted registration state
+#                        before creating a service from bootstrap env vars.
 #
 
 set -euo pipefail
@@ -172,6 +174,17 @@ normalize_mode() {
 
 has_bootstrap_env() {
     [[ -n "$(resolve_gateway_url)" || -n "$(resolve_agent_token)" || -n "$(resolve_workspace_id)" || -n "$(resolve_tenant_id)" || -n "$(resolve_org_id)" || -n "$(resolve_requested_mode)" ]]
+}
+
+truthy_env() {
+    case "${1:-}" in
+        1|true|TRUE|True|yes|YES|Yes)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 # ─── Version comparison ──────────────────────────────────────────────────────
@@ -670,6 +683,33 @@ detect_installed_version() {
     else
         echo "$parsed_version"
     fi
+}
+
+reset_agent_state_if_requested() {
+    if ! truthy_env "${IGRIS_RESET_STATE:-}"; then
+        return 0
+    fi
+
+    local state_file="${IGRIS_STATE_FILE:-/var/lib/igris/state.json}"
+    local state_dir
+    state_dir="$(dirname "$state_file")"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        rm -f "$state_file"
+        return 0
+    fi
+
+    if [[ -e "$state_file" ]]; then
+        rm -f "$state_file"
+        return 0
+    fi
+
+    if [[ -d "$state_dir" ]]; then
+        return 0
+    fi
+
+    ensure_sudo_available "reset persisted Igris registration state"
+    sudo rm -f "$state_file"
 }
 
 # ─── Download Binary ─────────────────────────────────────────────────────────
@@ -1494,6 +1534,7 @@ main() {
             create_daemonized_runtime
         fi
     elif has_bootstrap_env; then
+        reset_agent_state_if_requested
         create_systemd_service true
         create_openrc_service true
         create_launchd_service true

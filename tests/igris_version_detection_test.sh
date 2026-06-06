@@ -25,6 +25,7 @@ SCRIPT
 chmod +x "$tmp_dir/hung-bin/igris"
 
 PATH="$tmp_dir/hung-bin:$PATH"
+hash -r
 start_epoch="$(date +%s)"
 hung_version="$(detect_installed_version 1)"
 elapsed="$(( $(date +%s) - start_epoch ))"
@@ -51,4 +52,18 @@ if [[ "$parsed_version" != "1.2.3" ]]; then
   fail "parsed version = $parsed_version, want 1.2.3"
 fi
 
-echo "ok: igris version detection is bounded and parses semver"
+state_file="$tmp_dir/state/state.json"
+mkdir -p "$(dirname "$state_file")"
+printf '{"uuid":"stale"}\n' > "$state_file"
+IGRIS_STATE_FILE="$state_file" IGRIS_RESET_STATE=1 reset_agent_state_if_requested
+if [[ -f "$state_file" ]]; then
+  fail "reset_agent_state_if_requested should remove stale state file"
+fi
+
+printf '{"uuid":"keep"}\n' > "$state_file"
+IGRIS_STATE_FILE="$state_file" IGRIS_RESET_STATE=0 reset_agent_state_if_requested
+if [[ ! -f "$state_file" ]]; then
+  fail "reset_agent_state_if_requested should keep state file when reset is disabled"
+fi
+
+echo "ok: igris version detection and optional state reset are bounded"
