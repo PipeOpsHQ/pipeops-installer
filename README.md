@@ -112,7 +112,7 @@ the wrong public version.
 - Install with auto-enrollment as systemd service (Linux):
 
   ```sh
-  GATEWAY_URL=https://halo.example.com TOKEN=your-token \
+  GATEWAY_URL=https://gateway.example.com TOKEN=your-token \
     curl -fsSL https://get.pipeops.dev/igris.sh | bash
   ```
 
@@ -125,7 +125,7 @@ the wrong public version.
 - Run manually after install:
 
   ```sh
-  igris --gateway-url https://halo.example.com --token YOUR_TOKEN
+  igris --gateway-url https://gateway.example.com --token YOUR_TOKEN
   ```
 
 ### Vortex Network Agent
@@ -139,7 +139,7 @@ the wrong public version.
 - Install with auto-enrollment as systemd service:
 
   ```sh
-  VORTEX_GATEWAY_URL=https://halo.example.com \
+  VORTEX_GATEWAY_URL=https://gateway.example.com \
   VORTEX_BOOTSTRAP_TOKEN=your-token \
   VORTEX_WORKSPACE_ID=workspace-uuid \
     curl -fsSL https://get.pipeops.dev/vortex.sh | bash

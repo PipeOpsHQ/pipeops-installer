@@ -8,7 +8,7 @@
 #   VORTEX_INSTALL_DIR     - Binary install directory (default: /usr/local/bin)
 #   VORTEX_RELEASE_REPO    - GitHub release repo (default: PipeOpsHQ/vortex)
 #   VORTEX_GITHUB_TOKEN    - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
-#   VORTEX_GATEWAY_URL     - Halo Gateway URL (alias: GATEWAY_URL)
+#   VORTEX_GATEWAY_URL     - Gateway URL (alias: GATEWAY_URL)
 #   VORTEX_BOOTSTRAP_TOKEN - Agent bootstrap JWT/API key/service key (aliases: VORTEX_TOKEN, TOKEN, IGRIS_AGENT_TOKEN)
 #   VORTEX_WORKSPACE_ID    - Workspace ID/UUID (alias: WORKSPACE_ID)
 #   VORTEX_TENANT_ID       - Optional tenant ID/UUID (alias: TENANT_ID)
@@ -43,6 +43,8 @@ REPO="${VORTEX_RELEASE_REPO:-PipeOpsHQ/vortex}"
 GITHUB_URL="https://github.com/${REPO}"
 RELEASES_URL="${GITHUB_URL}/releases"
 SERVICE_STARTED="false"
+VORTEX_SERVICE_USER="${VORTEX_SERVICE_USER:-vortex}"
+VORTEX_SERVICE_GROUP="${VORTEX_SERVICE_GROUP:-$VORTEX_SERVICE_USER}"
 
 GITHUB_TOKEN_VALUE="${VORTEX_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
 
@@ -400,26 +402,46 @@ checksum_expected_for() {
   awk -v f="$filename" '($2 == f || $2 == "*" f) { print $1; exit }' "$checksums_file"
 }
 
+is_gnu_tar() {
+  tar --version 2>/dev/null | grep -qi 'gnu'
+}
+
+validate_extracted_payload_no_links() {
+  local dir="$1"
+  local symlink_entry
+
+  symlink_entry="$(find "$dir" -type l -print -quit 2>/dev/null || true)"
+  if [[ -n "$symlink_entry" ]]; then
+    error "Refusing to extract archive with symlink entry: ${symlink_entry}"
+  fi
+}
+
 validate_tar_entries() {
   local archive="$1"
   local entry
   local listing
+  local entry_type
 
   while IFS= read -r entry; do
     case "$entry" in
-      /*|..|../*|*/../*|*/..)
+      /*|../*|*'/../'*|*'/..' )
         error "Refusing to extract unsafe archive entry: ${entry}"
         ;;
     esac
-  done < <(tar -tzf "$archive")
+  done < <(tar -tf "$archive")
+
+  is_gnu_tar || return 0
 
   while IFS= read -r listing; do
-    case "${listing:0:1}" in
+    entry_type="${listing%% *}"
+    entry_type="${entry_type:0:1}"
+
+    case "$entry_type" in
       l|h)
         error "Refusing to extract archive with link entry: ${listing}"
         ;;
     esac
-  done < <(tar -tvzf "$archive")
+  done < <(LC_ALL=C tar -tvf "$archive")
 }
 
 install_release_payload() {
@@ -485,6 +507,7 @@ download_and_install() {
 
   validate_tar_entries "${tmp_dir}/${selected}"
   tar --no-same-owner --no-same-permissions -xzf "${tmp_dir}/${selected}" -C "$tmp_dir"
+  validate_extracted_payload_no_links "$tmp_dir"
   install_release_payload "$tmp_dir" "$INSTALL_DIR"
 
   success "Vortex installed successfully."
@@ -569,7 +592,56 @@ write_config_file() {
 
   ensure_sudo_available "write Vortex configuration"
   "${SUDO[@]}" mkdir -p /etc/vortex
-  "${SUDO[@]}" install -m 0600 "$tmp_config" /etc/vortex/config.toml
+  "${SUDO[@]}" install -m 0640 "$tmp_config" /etc/vortex/config.toml
+  "${SUDO[@]}" chown "root:${VORTEX_SERVICE_GROUP}" /etc/vortex/config.toml
+}
+
+ensure_vortex_service_user() {
+  local home_dir
+
+  if [[ "$VORTEX_SERVICE_USER" == "root" ]]; then
+    return 0
+  fi
+
+  if id -u "$VORTEX_SERVICE_USER" >/dev/null 2>&1; then
+    if ! getent group "$VORTEX_SERVICE_GROUP" >/dev/null 2>&1; then
+      error "Service group ${VORTEX_SERVICE_GROUP} does not exist for existing user ${VORTEX_SERVICE_USER}."
+    fi
+    return 0
+  fi
+
+  if ! getent group "$VORTEX_SERVICE_GROUP" >/dev/null 2>&1; then
+    if command -v groupadd >/dev/null 2>&1; then
+      groupadd --system "$VORTEX_SERVICE_GROUP" || error "Failed to create service group ${VORTEX_SERVICE_GROUP}."
+    elif ! command -v addgroup >/dev/null 2>&1; then
+      error "No supported tool available to create service group ${VORTEX_SERVICE_GROUP}."
+    else
+      addgroup --system "$VORTEX_SERVICE_GROUP" || error "Failed to create service group ${VORTEX_SERVICE_GROUP}."
+    fi
+  fi
+
+  home_dir="/var/lib/vortex"
+  if command -v useradd >/dev/null 2>&1; then
+    useradd \
+      --system \
+      --home-dir "$home_dir" \
+      --shell /usr/sbin/nologin \
+      --create-home \
+      --gid "$VORTEX_SERVICE_GROUP" \
+      "$VORTEX_SERVICE_USER" || error "Failed to create service user ${VORTEX_SERVICE_USER}."
+    return 0
+  fi
+
+  if command -v adduser >/dev/null 2>&1; then
+    adduser --system \
+      --home "$home_dir" \
+      --shell /usr/sbin/nologin \
+      --ingroup "$VORTEX_SERVICE_GROUP" \
+      "$VORTEX_SERVICE_USER" || error "Failed to create service user ${VORTEX_SERVICE_USER}."
+    return 0
+  fi
+
+  error "Cannot create service user ${VORTEX_SERVICE_USER}; please create it manually."
 }
 
 systemd_available() {
@@ -590,10 +662,22 @@ verify_systemd_service_active() {
 
 create_systemd_service() {
   local service_file="/etc/systemd/system/vortex.service"
+  local service_user
+  local capability_lines
 
   systemd_available || return 1
 
   ensure_sudo_available "install Vortex systemd service"
+  ensure_vortex_service_user
+  service_user="${VORTEX_SERVICE_USER}"
+  if [[ "$service_user" == "root" ]]; then
+    warn "VORTEX_SERVICE_USER is root; skipping AmbientCapabilities for safety."
+    capability_lines='CapabilityBoundingSet=CAP_NET_ADMIN CAP_BPF CAP_PERFMON'
+  else
+    capability_lines='AmbientCapabilities=CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_BPF CAP_PERFMON'
+  fi
+
   info "Creating systemd service at ${service_file}..."
 
   "${SUDO[@]}" tee "$service_file" >/dev/null <<EOF
@@ -607,7 +691,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=root
+User=${service_user}
+Group=${VORTEX_SERVICE_GROUP}
 WorkingDirectory=/var/lib/vortex
 ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config /etc/vortex/config.toml
 Restart=always
@@ -615,8 +700,7 @@ RestartSec=10
 TimeoutStopSec=15
 KillMode=mixed
 LimitMEMLOCK=infinity
-AmbientCapabilities=CAP_NET_ADMIN CAP_BPF CAP_PERFMON
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+${capability_lines}
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
@@ -635,8 +719,9 @@ WantedBy=multi-user.target
 EOF
 
   "${SUDO[@]}" mkdir -p /var/lib/vortex /var/log/vortex
+  "${SUDO[@]}" chown "${service_user}:${VORTEX_SERVICE_GROUP}" /var/lib/vortex /var/log/vortex
   "${SUDO[@]}" chmod 700 /var/lib/vortex
-  "${SUDO[@]}" chmod 755 /var/log/vortex
+  "${SUDO[@]}" chmod 750 /var/log/vortex
   "${SUDO[@]}" systemctl daemon-reload
   "${SUDO[@]}" systemctl enable vortex
   "${SUDO[@]}" systemctl restart vortex
@@ -720,7 +805,7 @@ print_success_message() {
   echo "  sudo ${INSTALL_DIR}/${BINARY_NAME} --iface $(resolve_iface)"
   echo
   echo "Auto-enrollment:"
-  echo "  VORTEX_GATEWAY_URL=https://halo.example.com \\"
+  echo "  VORTEX_GATEWAY_URL=https://gateway.example.com \\"
   echo "  VORTEX_BOOTSTRAP_TOKEN=<agent-install-service-key> \\"
   echo "  VORTEX_WORKSPACE_ID=<workspace-uuid> \\"
   echo "  curl -fsSL https://get.pipeops.dev/vortex.sh | bash"

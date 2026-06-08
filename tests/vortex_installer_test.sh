@@ -92,17 +92,119 @@ test_get_latest_version_fails_without_stable_release() {
 }
 
 test_validate_tar_entries_rejects_symlink() {
-  local tmp
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  local fake_archive="/tmp/fake-vortex-symlink.tar.gz"
+  local original_tar
+  original_tar="$(type -p tar)"
+  is_gnu_tar() { return 0; }
 
-  mkdir -p "$tmp/payload"
-  ln -s /etc/passwd "$tmp/payload/vortex"
-  tar -czf "$tmp/payload.tar.gz" -C "$tmp/payload" .
+  tar() {
+    local arg
+    local has_tf=0
+    local has_tvf=0
 
-  if (validate_tar_entries "$tmp/payload.tar.gz" >/dev/null 2>/dev/null); then
+    for arg in "$@"; do
+      if [[ "$arg" == "-tf" ]]; then
+        has_tf=1
+      elif [[ "$arg" == "-tvf" ]]; then
+        has_tvf=1
+      fi
+    done
+
+    if (( has_tf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf 'vortex\n'
+      return 0
+    fi
+
+    if (( has_tvf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf 'lwrwxrwxrwx root/root 0 2026-06-08 00:00 vortex -> /etc/passwd\n'
+      return 0
+    fi
+
+    "$original_tar" "$@"
+  }
+
+  if (validate_tar_entries "$fake_archive" >/dev/null 2>/dev/null); then
     fail "validate_tar_entries should reject symlink entries"
   fi
+
+  unset -f is_gnu_tar
+  unset -f tar
+}
+
+test_validate_tar_entries_rejects_absolute_paths() {
+  local fake_archive="/tmp/fake-vortex-absolute.tar.gz"
+  local original_tar
+  original_tar="$(type -p tar)"
+
+  tar() {
+    local arg
+    local has_tf=0
+    local has_tvf=0
+
+    for arg in "$@"; do
+      if [[ "$arg" == "-tf" ]]; then
+        has_tf=1
+      elif [[ "$arg" == "-tvf" ]]; then
+        has_tvf=1
+      fi
+    done
+
+    if (( has_tf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf '/etc/passwd\n'
+      return 0
+    fi
+
+    if (( has_tvf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf '-rw-r--r-- root/root 0 2026-06-08 00:00 /etc/passwd\n'
+      return 0
+    fi
+
+    "$original_tar" "$@"
+  }
+
+  if (validate_tar_entries "$fake_archive" >/dev/null 2>/dev/null); then
+    fail "validate_tar_entries should reject absolute-path entries"
+  fi
+
+  unset -f tar
+}
+
+test_validate_tar_entries_rejects_traversal_paths() {
+  local fake_archive="/tmp/fake-vortex-traversal.tar.gz"
+  local original_tar
+  original_tar="$(type -p tar)"
+
+  tar() {
+    local arg
+    local has_tf=0
+    local has_tvf=0
+
+    for arg in "$@"; do
+      if [[ "$arg" == "-tf" ]]; then
+        has_tf=1
+      elif [[ "$arg" == "-tvf" ]]; then
+        has_tvf=1
+      fi
+    done
+
+    if (( has_tf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf '../etc/passwd\n'
+      return 0
+    fi
+
+    if (( has_tvf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf '-rw-r--r-- root/root 0 2026-06-08 00:00 ../etc/passwd\n'
+      return 0
+    fi
+
+    "$original_tar" "$@"
+  }
+
+  if (validate_tar_entries "$fake_archive" >/dev/null 2>/dev/null); then
+    fail "validate_tar_entries should reject directory traversal entries"
+  fi
+
+  unset -f tar
 }
 
 test_normalize_version
@@ -113,5 +215,7 @@ test_render_config_file
 test_get_latest_version_uses_highest_stable_release
 test_get_latest_version_fails_without_stable_release
 test_validate_tar_entries_rejects_symlink
+test_validate_tar_entries_rejects_absolute_paths
+test_validate_tar_entries_rejects_traversal_paths
 
 echo "ok"
