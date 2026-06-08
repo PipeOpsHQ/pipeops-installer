@@ -83,6 +83,8 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
   - The latest version is the highest `vMAJOR.MINOR.PATCH` release in that repo, not GitHub's `latest` label.
   - Optional: set `IGRIS_VERSION=1.6.3` to pin to a specific Igris release.
   - Optional: set `IGRIS_BINARY_BASE_URL` only for explicit raw/self-hosted artifact installs.
+  - Linux host installs with `GATEWAY_URL`, `TOKEN`, and `WORKSPACE_ID` install Vortex automatically. Set `INSTALL_VORTEX=false` or `IGRIS_INSTALL_VORTEX=false` to opt out.
+  - Set `IGRIS_REQUIRE_VORTEX=true` when Vortex installation failure should fail the host install instead of warning and continuing.
 
 - `vortex.sh` variables:
   - `VORTEX_RELEASE_REPO` defaults to `PipeOpsHQ/vortex`.
@@ -112,14 +114,22 @@ the wrong public version.
 - Install with auto-enrollment as systemd service (Linux):
 
   ```sh
-  GATEWAY_URL=https://halo.example.com TOKEN=your-token \
-    curl -fsSL https://get.pipeops.dev/igris.sh | bash
+  curl -fsSL https://get.pipeops.dev/igris.sh | \
+    GATEWAY_URL=https://halo.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid bash
+  ```
+
+  Linux host installs with `WORKSPACE_ID` also install the Vortex network agent by default.
+  To install only Igris:
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/igris.sh | \
+    GATEWAY_URL=https://halo.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=false bash
   ```
 
 - Install a specific version:
 
   ```sh
-  IGRIS_VERSION=1.6.3 curl -fsSL https://get.pipeops.dev/igris.sh | bash
+  curl -fsSL https://get.pipeops.dev/igris.sh | IGRIS_VERSION=1.6.3 bash
   ```
 
 - Run manually after install:
@@ -139,16 +149,16 @@ the wrong public version.
 - Install with auto-enrollment as systemd service:
 
   ```sh
-  VORTEX_GATEWAY_URL=https://halo.example.com \
-  VORTEX_BOOTSTRAP_TOKEN=your-token \
-  VORTEX_WORKSPACE_ID=workspace-uuid \
-    curl -fsSL https://get.pipeops.dev/vortex.sh | bash
+  curl -fsSL https://get.pipeops.dev/vortex.sh | \
+    VORTEX_GATEWAY_URL=https://halo.example.com \
+    VORTEX_BOOTSTRAP_TOKEN=your-token \
+    VORTEX_WORKSPACE_ID=workspace-uuid bash
   ```
 
 - Install a specific version:
 
   ```sh
-  VORTEX_VERSION=0.1.0 curl -fsSL https://get.pipeops.dev/vortex.sh | bash
+  curl -fsSL https://get.pipeops.dev/vortex.sh | VORTEX_VERSION=0.1.0 bash
   ```
 
 - Run manually after install:

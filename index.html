@@ -22,11 +22,14 @@
         <h2>🛡️ Igris Security Agent</h2>
         <p>Install the Igris agent for autonomous security monitoring:</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | bash</code></pre>
-        <p>Install with auto-enrollment (Linux systemd service):</p>
-        <pre><code>GATEWAY_URL=https://halo.example.com TOKEN=xxx \
-  curl -fsSL https://get.pipeops.dev/igris.sh | bash</code></pre>
+        <p>Install with auto-enrollment (Linux systemd service). Linux host installs with a workspace also install Vortex by default:</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | \
+  GATEWAY_URL=https://halo.example.com TOKEN=xxx WORKSPACE_ID=workspace-uuid bash</code></pre>
+        <p>Install only Igris:</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | \
+  GATEWAY_URL=https://halo.example.com TOKEN=xxx WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=false bash</code></pre>
         <p>Pin a specific version:</p>
-        <pre><code>IGRIS_VERSION=1.6.3 curl -fsSL https://get.pipeops.dev/igris.sh | bash</code></pre>
+        <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | IGRIS_VERSION=1.6.3 bash</code></pre>
       </div>
 
       <div class="card">
@@ -34,12 +37,10 @@
         <p>Install the Vortex network monitoring agent:</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/vortex.sh | bash</code></pre>
         <p>Install with auto-enrollment (Linux systemd service):</p>
-        <pre><code>VORTEX_GATEWAY_URL=https://halo.example.com \
-VORTEX_BOOTSTRAP_TOKEN=xxx \
-VORTEX_WORKSPACE_ID=workspace-uuid \
-  curl -fsSL https://get.pipeops.dev/vortex.sh | bash</code></pre>
+        <pre><code>curl -fsSL https://get.pipeops.dev/vortex.sh | \
+  VORTEX_GATEWAY_URL=https://halo.example.com VORTEX_BOOTSTRAP_TOKEN=xxx VORTEX_WORKSPACE_ID=workspace-uuid bash</code></pre>
         <p>Pin a specific version:</p>
-        <pre><code>VORTEX_VERSION=0.1.0 curl -fsSL https://get.pipeops.dev/vortex.sh | bash</code></pre>
+        <pre><code>curl -fsSL https://get.pipeops.dev/vortex.sh | VORTEX_VERSION=0.1.0 bash</code></pre>
       </div>
 
       <div class="card">
