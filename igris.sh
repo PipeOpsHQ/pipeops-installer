@@ -6,13 +6,15 @@
 # Environment variables:
 #   IGRIS_VERSION      - Specific version to install (default: latest)
 #   IGRIS_INSTALL_DIR  - Installation directory (default: /usr/local/bin)
-#   IGRIS_GATEWAY_URL  - Halo Gateway URL (alias: GATEWAY_URL)
+#   IGRIS_GATEWAY_URL  - Gateway URL (alias: GATEWAY_URL)
 #   IGRIS_AGENT_TOKEN  - Agent bootstrap JWT or API key (aliases: IGRIS_TOKEN, TOKEN)
 #   IGRIS_WORKSPACE_ID - Optional workspace ID/UUID override (alias: WORKSPACE_ID)
 #   IGRIS_MODE         - Deployment mode / agent type (alias: MODE)
 #   IGRIS_BINARY_BASE_URL - Optional base URL for raw/self-hosted binaries named igris-<os>-<arch>[.exe]
 #   INSTALL_VORTEX     - Install Vortex alongside Linux host installs (default: auto; aliases: IGRIS_INSTALL_VORTEX)
 #   VORTEX_INSTALLER_URL - Optional Vortex installer URL (default: https://get.pipeops.dev/vortex.sh)
+#   VORTEX_INSTALLER_ALLOWED_HOSTS - Comma-separated allowlist for Vortex installer host(s)
+#   VORTEX_INSTALLER_SHA256 - Optional SHA-256 checksum for the downloaded Vortex installer script.
 #   IGRIS_RELEASE_REPO - GitHub release repo for public agent assets
 #                        (default: PipeOpsHQ/pipeops-installer)
 #   IGRIS_GITHUB_TOKEN - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
@@ -28,6 +30,18 @@ if [[ "$(id -u)" -eq 0 ]] && ! command -v sudo >/dev/null 2>&1; then
         "$@"
     }
 fi
+
+# Keep temporary installer artifacts (script + env) from persisting across
+# failures, and ensure they are not left behind on normal exit.
+TMP_PATHS=()
+cleanup_tmp_paths() {
+  local path
+
+  for path in "${TMP_PATHS[@]:-}"; do
+    rm -rf "$path" || true
+  done
+}
+trap cleanup_tmp_paths EXIT
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 REQUESTED_VERSION="${IGRIS_VERSION:-}"
@@ -45,6 +59,7 @@ IGRIS_SERVICE_STARTED="false"
 # supported for private release repo overrides or environments that need a
 # higher GitHub API rate limit.
 GITHUB_TOKEN_VALUE="${IGRIS_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
+VORTEX_INSTALLER_ALLOWED_HOSTS="${VORTEX_INSTALLER_ALLOWED_HOSTS:-get.pipeops.dev}"
 
 # Colors for output
 RED=$'\033[0;31m'
@@ -128,6 +143,150 @@ refuse_insecure_artifact_token() {
     if [[ -n "$token" && "$url" == http://* ]] && ! allow_insecure_http; then
         error "Refusing to send TOKEN over plain HTTP to ${url}. Use HTTPS or set IGRIS_ALLOW_INSECURE_HTTP=1 for local testing."
     fi
+}
+
+normalize_url_host() {
+    local url="$1"
+    local host
+
+    case "$url" in
+        https://*|http://*)
+            host="${url#*://}"
+            printf '%s' "${host%%/*}"
+            ;;
+        *)
+            printf ''
+            ;;
+    esac
+}
+
+calculate_sha256() {
+    local file="$1"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+        return
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+        return
+    fi
+
+    error "No sha256 utility available. Install sha256sum or shasum."
+}
+
+verify_vortex_installer_checksum() {
+    local installer_path="$1"
+    local expected_sha256="${2:-${VORTEX_INSTALLER_SHA256:-}}"
+
+    if [[ -z "$expected_sha256" ]]; then
+        return
+    fi
+
+    local actual_sha256
+    actual_sha256="$(calculate_sha256 "$installer_path")"
+    if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+        error "Vortex installer checksum mismatch for ${installer_path}. expected=${expected_sha256} actual=${actual_sha256}"
+    fi
+}
+
+trim_allowed_host() {
+    local value="$1"
+    tr -d '[:space:]' <<< "$value"
+}
+
+vortex_installer_host_allowed() {
+    local url="$1"
+    local host normalized
+    local allowed_host
+    local host_without_port
+    local allowed_hosts
+
+    host="$(normalize_url_host "$url")"
+    if [[ -z "$host" ]]; then
+        echo "Invalid VORTEX_INSTALLER_URL: ${url}" >&2
+        return 1
+    fi
+
+    case "$url" in
+        https://*)
+            ;;
+        http://*)
+            if allow_insecure_http; then
+                :
+            else
+                echo "Refusing non-HTTPS VORTEX_INSTALLER_URL: ${url}. Set IGRIS_ALLOW_INSECURE_HTTP=1 for local testing." >&2
+                return 1
+            fi
+            ;;
+        *)
+            echo "Unsupported VORTEX_INSTALLER_URL scheme: ${url}" >&2
+            return 1
+            ;;
+    esac
+
+    host_without_port="${host%%:*}"
+    IFS=',' read -r -a allowed <<< "${VORTEX_INSTALLER_ALLOWED_HOSTS}"
+    for allowed_host in "${allowed[@]}"; do
+        normalized="$(trim_allowed_host "$allowed_host")"
+        [[ -z "$normalized" ]] && continue
+        if [[ "$host_without_port" == "$normalized" ]]; then
+            return 0
+        fi
+    done
+
+    allowed_hosts="$(echo "${VORTEX_INSTALLER_ALLOWED_HOSTS}" | tr ',' ' ')"
+    echo "Refusing VORTEX_INSTALLER_URL host '${host_without_port}'. Allowed hosts: ${allowed_hosts}" >&2
+    return 1
+}
+
+download_installer_script() {
+    local installer_url="$1"
+    local output_path="$2"
+    local expected_sha256="${3:-}"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            -o "$output_path" "$installer_url" || return 1
+        verify_vortex_installer_checksum "$output_path" "$expected_sha256"
+        return 0
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -q --https-only --secure-protocol=TLSv1_2 -O "$output_path" "$installer_url" || return 1
+        verify_vortex_installer_checksum "$output_path" "$expected_sha256"
+        return 0
+    fi
+
+    error "curl or wget is required to install bundled Vortex Network Agent."
+}
+
+write_env_file() {
+    local output_path="$1"
+    shift
+    local old_umask
+    local line
+
+    old_umask="$(umask)"
+    umask 077
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'set -a\n'
+        for line in "$@"; do
+            printf '%s\n' "$line"
+        done
+        printf 'set +a\n'
+    } > "$output_path"
+    umask "$old_umask"
+    chmod 0600 "$output_path"
+}
+
+emit_vortex_env_assignment() {
+    local name="$1" value="$2"
+    local escaped
+    escaped="$(printf '%q' "$value")"
+    printf '%s=%s\n' "$name" "$escaped"
 }
 
 resolve_workspace_id() {
@@ -258,49 +417,51 @@ build_vortex_env_lines() {
     tenant_id="$(resolve_tenant_id)"
     org_id="$(resolve_org_id)"
 
-    printf 'VORTEX_GATEWAY_URL=%s\n' "$gateway_url"
-    printf 'VORTEX_BOOTSTRAP_TOKEN=%s\n' "$token"
-    printf 'VORTEX_WORKSPACE_ID=%s\n' "$workspace_id"
-    [[ -n "$tenant_id" ]] && printf 'VORTEX_TENANT_ID=%s\n' "$tenant_id"
-    [[ -n "$org_id" ]] && printf 'VORTEX_ORG_ID=%s\n' "$org_id"
-    printf 'VORTEX_INSTALL_SERVICE=true\n'
-    [[ -n "${VORTEX_IFACE:-}" ]] && printf 'VORTEX_IFACE=%s\n' "$VORTEX_IFACE"
-    [[ -n "${VORTEX_CAPTURE_BACKEND:-}" ]] && printf 'VORTEX_CAPTURE_BACKEND=%s\n' "$VORTEX_CAPTURE_BACKEND"
-    [[ -n "${VORTEX_IPS_MODE:-}" ]] && printf 'VORTEX_IPS_MODE=%s\n' "$VORTEX_IPS_MODE"
-    [[ -n "${VORTEX_METRICS_PORT:-}" ]] && printf 'VORTEX_METRICS_PORT=%s\n' "$VORTEX_METRICS_PORT"
-    [[ -n "${VORTEX_VERSION:-}" ]] && printf 'VORTEX_VERSION=%s\n' "$VORTEX_VERSION"
-    [[ -n "${VORTEX_RELEASE_REPO:-}" ]] && printf 'VORTEX_RELEASE_REPO=%s\n' "$VORTEX_RELEASE_REPO"
-    [[ -n "${VORTEX_GITHUB_TOKEN:-}" ]] && printf 'VORTEX_GITHUB_TOKEN=%s\n' "$VORTEX_GITHUB_TOKEN"
-    [[ -n "${GITHUB_TOKEN:-}" ]] && printf 'GITHUB_TOKEN=%s\n' "$GITHUB_TOKEN"
-    [[ -n "${GH_TOKEN:-}" ]] && printf 'GH_TOKEN=%s\n' "$GH_TOKEN"
+    emit_vortex_env_assignment "VORTEX_GATEWAY_URL" "$gateway_url"
+    emit_vortex_env_assignment "VORTEX_BOOTSTRAP_TOKEN" "$token"
+    emit_vortex_env_assignment "VORTEX_WORKSPACE_ID" "$workspace_id"
+    [[ -n "$tenant_id" ]] && emit_vortex_env_assignment "VORTEX_TENANT_ID" "$tenant_id"
+    [[ -n "$org_id" ]] && emit_vortex_env_assignment "VORTEX_ORG_ID" "$org_id"
+    emit_vortex_env_assignment "VORTEX_INSTALL_SERVICE" "true"
+    [[ -n "${VORTEX_IFACE:-}" ]] && emit_vortex_env_assignment "VORTEX_IFACE" "$VORTEX_IFACE"
+    [[ -n "${VORTEX_CAPTURE_BACKEND:-}" ]] && emit_vortex_env_assignment "VORTEX_CAPTURE_BACKEND" "$VORTEX_CAPTURE_BACKEND"
+    [[ -n "${VORTEX_IPS_MODE:-}" ]] && emit_vortex_env_assignment "VORTEX_IPS_MODE" "$VORTEX_IPS_MODE"
+    [[ -n "${VORTEX_METRICS_PORT:-}" ]] && emit_vortex_env_assignment "VORTEX_METRICS_PORT" "$VORTEX_METRICS_PORT"
+    [[ -n "${VORTEX_VERSION:-}" ]] && emit_vortex_env_assignment "VORTEX_VERSION" "$VORTEX_VERSION"
+    [[ -n "${VORTEX_RELEASE_REPO:-}" ]] && emit_vortex_env_assignment "VORTEX_RELEASE_REPO" "$VORTEX_RELEASE_REPO"
+    [[ -n "${VORTEX_GITHUB_TOKEN:-}" ]] && emit_vortex_env_assignment "VORTEX_GITHUB_TOKEN" "$VORTEX_GITHUB_TOKEN"
+    [[ -n "${GITHUB_TOKEN:-}" ]] && emit_vortex_env_assignment "GITHUB_TOKEN" "$GITHUB_TOKEN"
+    [[ -n "${GH_TOKEN:-}" ]] && emit_vortex_env_assignment "GH_TOKEN" "$GH_TOKEN"
     return 0
 }
 
 run_vortex_installer() {
     local installer_url="$1"
     shift
+    local temp_dir temp_script env_file
+    local -a script_cmd
 
-    if command -v curl >/dev/null 2>&1; then
-        if [[ "$(id -u)" -eq 0 ]]; then
-            curl -fsSL "$installer_url" | env "$@" bash
-        else
-            ensure_sudo_available "install bundled Vortex Network Agent"
-            curl -fsSL "$installer_url" | sudo env "$@" bash
-        fi
-        return
+    if ! vortex_installer_host_allowed "$installer_url"; then
+        return 1
     fi
 
-    if command -v wget >/dev/null 2>&1; then
-        if [[ "$(id -u)" -eq 0 ]]; then
-            wget -qO- "$installer_url" | env "$@" bash
-        else
-            ensure_sudo_available "install bundled Vortex Network Agent"
-            wget -qO- "$installer_url" | sudo env "$@" bash
-        fi
-        return
+    temp_dir="$(mktemp -d)"
+    TMP_PATHS+=("$temp_dir")
+    temp_script="${temp_dir}/vortex.sh"
+    env_file="${temp_dir}/vortex.env"
+
+    download_installer_script "$installer_url" "$temp_script" "${VORTEX_INSTALLER_SHA256:-}" || error "Failed to download Vortex installer from ${installer_url}"
+    chmod 700 "$temp_script"
+    write_env_file "$env_file" "$@"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        script_cmd=(bash -c)
+    else
+        ensure_sudo_available "install bundled Vortex Network Agent"
+        script_cmd=(sudo bash -c)
     fi
 
-    error "curl or wget is required to install bundled Vortex Network Agent."
+    "${script_cmd[@]}" 'set -a; . "$1"; set +a; exec bash "$2"' "$env_file" "$temp_script"
 }
 
 install_bundled_vortex_if_needed() {
@@ -316,6 +477,7 @@ install_bundled_vortex_if_needed() {
         [[ -n "$env_line" ]] && env_args+=("$env_line")
     done < <(build_vortex_env_lines)
 
+    refuse_insecure_artifact_token "$installer_url" "$(resolve_agent_token)"
     info "Installing bundled Vortex Network Agent..."
     if run_vortex_installer "$installer_url" "${env_args[@]}"; then
         success "Bundled Vortex Network Agent installed."
@@ -925,7 +1087,7 @@ create_systemd_service() {
     fi
 
     if [[ -z "$gateway_url" && "$auto_config" != "true" ]]; then
-        read -p "Enter Halo Gateway URL (e.g., https://halo.example.com): " gateway_url
+        read -p "Enter Gateway URL (e.g., https://gateway.example.com): " gateway_url
     fi
 
     if [[ -z "$token" && "$auto_config" != "true" ]]; then
@@ -1055,7 +1217,7 @@ create_openrc_service() {
     fi
 
     if [[ -z "$gateway_url" && "$auto_config" != "true" ]]; then
-        read -p "Enter Halo Gateway URL (e.g., https://halo.example.com): " gateway_url
+        read -p "Enter Gateway URL (e.g., https://gateway.example.com): " gateway_url
     fi
 
     if [[ -z "$token" && "$auto_config" != "true" ]]; then
@@ -1161,7 +1323,7 @@ create_launchd_service() {
     fi
 
     if [[ -z "$gateway_url" && "$auto_config" != "true" ]]; then
-        read -p "Enter Halo Gateway URL (e.g., https://halo.example.com): " gateway_url
+        read -p "Enter Gateway URL (e.g., https://gateway.example.com): " gateway_url
     fi
 
     if [[ -z "$token" && "$auto_config" != "true" ]]; then
@@ -1261,7 +1423,7 @@ print_usage() {
 ${GREEN}Igris Agent installed successfully!${NC}
 
 ${BLUE}Quick Start:${NC}
-  export IGRIS_GATEWAY_URL=https://your-halo-gateway.com
+  export IGRIS_GATEWAY_URL=https://gateway.example.com
   export IGRIS_AGENT_TOKEN=YOUR_TOKEN
   ${BINARY_NAME}
 
@@ -1274,20 +1436,20 @@ ${BLUE}Shorthand Aliases:${NC}
 
 ${BLUE}Examples:${NC}
   # Basic enrollment
-  GATEWAY_URL=https://halo.example.com TOKEN=<agent-install-service-key> ${BINARY_NAME}
+  GATEWAY_URL=https://gateway.example.com TOKEN=<agent-install-service-key> ${BINARY_NAME}
 
   # Agent-type aliases are normalized automatically
-  GATEWAY_URL=https://halo.example.com TOKEN=<bootstrap-jwt-or-api-key> \
+  GATEWAY_URL=https://gateway.example.com TOKEN=<bootstrap-jwt-or-api-key> \
   WORKSPACE_ID=<workspace-uuid> MODE=daemonset ${BINARY_NAME}
 
   # Install + auto-configure a systemd/launchd service from the one-liner
   curl -fsSL https://get.pipeops.dev/igris.sh | \
-    GATEWAY_URL=https://halo.example.com TOKEN=<agent-install-service-key> MODE=host bash
+    GATEWAY_URL=https://gateway.example.com TOKEN=<agent-install-service-key> MODE=host bash
 
   # Linux host installs with WORKSPACE_ID also install Vortex by default.
   # Disable the bundled network agent when needed:
   curl -fsSL https://get.pipeops.dev/igris.sh | \
-    GATEWAY_URL=https://halo.example.com TOKEN=<agent-install-service-key> \
+    GATEWAY_URL=https://gateway.example.com TOKEN=<agent-install-service-key> \
     WORKSPACE_ID=<workspace-uuid> INSTALL_VORTEX=false bash
 
 ${BLUE}Documentation:${NC}

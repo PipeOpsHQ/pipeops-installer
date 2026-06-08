@@ -115,7 +115,7 @@ the wrong public version.
 
   ```sh
   curl -fsSL https://get.pipeops.dev/igris.sh | \
-    GATEWAY_URL=https://halo.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid bash
+    GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid bash
   ```
 
   Linux host installs with `WORKSPACE_ID` also install the Vortex network agent by default.
@@ -123,7 +123,7 @@ the wrong public version.
 
   ```sh
   curl -fsSL https://get.pipeops.dev/igris.sh | \
-    GATEWAY_URL=https://halo.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=false bash
+    GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=false bash
   ```
 
 - Install a specific version:
@@ -135,7 +135,7 @@ the wrong public version.
 - Run manually after install:
 
   ```sh
-  igris --gateway-url https://halo.example.com --token YOUR_TOKEN
+  igris --gateway-url https://gateway.example.com --token YOUR_TOKEN
   ```
 
 ### Vortex Network Agent
@@ -150,7 +150,7 @@ the wrong public version.
 
   ```sh
   curl -fsSL https://get.pipeops.dev/vortex.sh | \
-    VORTEX_GATEWAY_URL=https://halo.example.com \
+    VORTEX_GATEWAY_URL=https://gateway.example.com \
     VORTEX_BOOTSTRAP_TOKEN=your-token \
     VORTEX_WORKSPACE_ID=workspace-uuid bash
   ```

@@ -57,12 +57,13 @@ assert_should_not_install() {
   fi
 }
 
+
 test_defaults_to_vortex_for_linux_host_bootstrap() {
   assert_should_install \
     "linux host bootstrap defaults on" \
     IGRIS_INSTALLER_SKIP_MAIN=1 \
     IGRIS_TEST_OS=Linux \
-    GATEWAY_URL=https://halo.example.com \
+    GATEWAY_URL=https://gateway.example.com \
     TOKEN=hsk_test \
     WORKSPACE_ID=workspace-1 \
     MODE=host
@@ -73,7 +74,7 @@ test_skips_vortex_for_non_host_modes() {
     "kubernetes bootstrap skips bundled Vortex" \
     IGRIS_INSTALLER_SKIP_MAIN=1 \
     IGRIS_TEST_OS=Linux \
-    GATEWAY_URL=https://halo.example.com \
+    GATEWAY_URL=https://gateway.example.com \
     TOKEN=hsk_test \
     WORKSPACE_ID=workspace-1 \
     MODE=daemonset
@@ -84,7 +85,7 @@ test_skips_vortex_when_disabled() {
     "explicit opt-out skips bundled Vortex" \
     IGRIS_INSTALLER_SKIP_MAIN=1 \
     IGRIS_TEST_OS=Linux \
-    GATEWAY_URL=https://halo.example.com \
+    GATEWAY_URL=https://gateway.example.com \
     TOKEN=hsk_test \
     WORKSPACE_ID=workspace-1 \
     MODE=host \
@@ -96,7 +97,7 @@ test_skips_vortex_without_workspace() {
     "workspace is required for Vortex enrollment" \
     IGRIS_INSTALLER_SKIP_MAIN=1 \
     IGRIS_TEST_OS=Linux \
-    GATEWAY_URL=https://halo.example.com \
+    GATEWAY_URL=https://gateway.example.com \
     TOKEN=hsk_test \
     MODE=host
 }
@@ -105,7 +106,7 @@ test_builds_vortex_env_from_igris_context() {
   local lines
 
   lines="$(
-    GATEWAY_URL=https://halo.example.com \
+    GATEWAY_URL=https://gateway.example.com \
     TOKEN=hsk_test \
     WORKSPACE_ID=workspace-1 \
     TENANT_ID=tenant-1 \
@@ -117,7 +118,7 @@ test_builds_vortex_env_from_igris_context() {
     build_vortex_env_lines
   )"
 
-  assert_contains_line "$lines" "VORTEX_GATEWAY_URL=https://halo.example.com" "gateway env"
+  assert_contains_line "$lines" "VORTEX_GATEWAY_URL=https://gateway.example.com" "gateway env"
   assert_contains_line "$lines" "VORTEX_BOOTSTRAP_TOKEN=hsk_test" "token env"
   assert_contains_line "$lines" "VORTEX_WORKSPACE_ID=workspace-1" "workspace env"
   assert_contains_line "$lines" "VORTEX_TENANT_ID=tenant-1" "tenant env"
@@ -127,6 +128,74 @@ test_builds_vortex_env_from_igris_context() {
   assert_contains_line "$lines" "VORTEX_IPS_MODE=true" "ips mode env"
   assert_contains_line "$lines" "VORTEX_METRICS_PORT=19090" "metrics env"
   assert_contains_line "$lines" "VORTEX_INSTALL_SERVICE=true" "service env"
+}
+
+test_vortex_installer_host_allowlist() {
+  local run
+
+  run="$(cat <<'SH'
+#!/usr/bin/env bash
+source "$1"
+
+if ! vortex_installer_host_allowed "https://get.pipeops.dev/vortex.sh"; then
+  exit 1
+fi
+
+if ! vortex_installer_host_allowed "https://127.0.0.1/vortex.sh"; then
+  exit 1
+fi
+
+vortex_installer_host_allowed "https://malicious.example.com/vortex.sh"
+SH
+)"
+
+if env VORTEX_INSTALLER_ALLOWED_HOSTS="get.pipeops.dev,127.0.0.1" \
+    IGRIS_INSTALLER_SKIP_MAIN=1 \
+    bash -c "$run" ignored "$REPO_ROOT/igris.sh"; then
+  fail "vortex installer host allowlist: rejected unknown host"
+fi
+
+  return 0
+}
+
+test_vortex_installer_security_gate_checks() {
+  local run
+
+  run="$(cat <<'SH'
+#!/usr/bin/env bash
+source "$1"
+
+if run_vortex_installer "https://malicious.example.com/vortex.sh"; then
+  exit 1
+fi
+
+if run_vortex_installer "http://get.pipeops.dev/vortex.sh"; then
+  exit 1
+fi
+SH
+)"
+
+if ! env VORTEX_INSTALLER_ALLOWED_HOSTS="get.pipeops.dev" \
+    IGRIS_INSTALLER_SKIP_MAIN=1 \
+    bash -c "$run" ignored "$REPO_ROOT/igris.sh"; then
+  fail "vortex installer security gate checks: disallowed URLs should be rejected"
+fi
+
+  return 0
+}
+
+test_vortex_installer_checksum_validation() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  printf 'trusted contents' > "$tmp/vortex.sh"
+  VORTEX_INSTALLER_SHA256="$(calculate_sha256 "$tmp/vortex.sh")" \
+    verify_vortex_installer_checksum "$tmp/vortex.sh" || fail "matching checksum should pass"
+
+  if (VORTEX_INSTALLER_SHA256="deadbeef" verify_vortex_installer_checksum "$tmp/vortex.sh" >/dev/null 2>&1); then
+    fail "mismatched checksum should fail"
+  fi
 }
 
 test_install_hook_invokes_vortex_installer() {
@@ -144,7 +213,7 @@ test_install_hook_invokes_vortex_installer() {
     } > "$tmp"
   }
 
-  GATEWAY_URL=https://halo.example.com \
+  GATEWAY_URL=https://gateway.example.com \
   TOKEN=hsk_test \
   WORKSPACE_ID=workspace-1 \
   VORTEX_INSTALLER_URL=https://get.pipeops.dev/vortex.sh \
@@ -152,7 +221,7 @@ test_install_hook_invokes_vortex_installer() {
 
   contents="$(cat "$tmp")"
   assert_contains_line "$contents" "URL=https://get.pipeops.dev/vortex.sh" "installer url"
-  assert_contains_line "$contents" "VORTEX_GATEWAY_URL=https://halo.example.com" "installer gateway env"
+  assert_contains_line "$contents" "VORTEX_GATEWAY_URL=https://gateway.example.com" "installer gateway env"
   assert_contains_line "$contents" "VORTEX_BOOTSTRAP_TOKEN=hsk_test" "installer token env"
   assert_contains_line "$contents" "VORTEX_WORKSPACE_ID=workspace-1" "installer workspace env"
   assert_contains_line "$contents" "VORTEX_INSTALL_SERVICE=true" "installer service env"
@@ -163,6 +232,9 @@ test_skips_vortex_for_non_host_modes
 test_skips_vortex_when_disabled
 test_skips_vortex_without_workspace
 test_builds_vortex_env_from_igris_context
+test_vortex_installer_host_allowlist
+test_vortex_installer_security_gate_checks
+test_vortex_installer_checksum_validation
 test_install_hook_invokes_vortex_installer
 
 echo "ok"
