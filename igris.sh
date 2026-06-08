@@ -1129,6 +1129,8 @@ EnvironmentFile=${env_file}
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
 Restart=always
 RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=10
 # Bound graceful shutdown to 15s so a re-install never blocks waiting for
 # a wedged old process (e.g., one looping on a 401 from the gateway).
 # Default is 90s, which produces a long-feeling 'install hung' on re-runs.
@@ -1371,7 +1373,11 @@ create_launchd_service() {
     <dict>
         <key>SuccessfulExit</key>
         <false/>
+        <key>Crashed</key>
+        <true/>
     </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
     <key>WorkingDirectory</key>
     <string>/var/lib/igris</string>
     <key>StandardOutPath</key>
