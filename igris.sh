@@ -15,6 +15,8 @@
 #                        (default: PipeOpsHQ/pipeops-installer)
 #   IGRIS_GITHUB_TOKEN - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
 #                        for private release repo overrides or rate limits.
+#   IGRIS_RESET_STATE  - Set to 1/true to remove persisted registration state
+#                        before creating a service from bootstrap env vars.
 #
 
 set -euo pipefail
@@ -172,6 +174,17 @@ normalize_mode() {
 
 has_bootstrap_env() {
     [[ -n "$(resolve_gateway_url)" || -n "$(resolve_agent_token)" || -n "$(resolve_workspace_id)" || -n "$(resolve_tenant_id)" || -n "$(resolve_org_id)" || -n "$(resolve_requested_mode)" ]]
+}
+
+truthy_env() {
+    case "${1:-}" in
+        1|true|TRUE|True|yes|YES|Yes)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 # ─── Version comparison ──────────────────────────────────────────────────────
@@ -597,6 +610,108 @@ get_latest_version() {
     else
         echo "$latest"
     fi
+}
+
+run_with_timeout() {
+    local timeout_seconds="$1"
+    shift
+
+    local tmp_dir stdout_file stderr_file timed_out_file cleanup_cmd
+    local command_pid watcher_pid rc
+    tmp_dir="$(mktemp -d)"
+    stdout_file="${tmp_dir}/stdout"
+    stderr_file="${tmp_dir}/stderr"
+    timed_out_file="${tmp_dir}/timed-out"
+    printf -v cleanup_cmd 'rm -rf -- %q; trap - RETURN' "$tmp_dir"
+    trap "$cleanup_cmd" RETURN
+
+    "$@" >"$stdout_file" 2>"$stderr_file" &
+    command_pid="$!"
+
+    (
+        sleep "$timeout_seconds"
+        if kill -0 "$command_pid" 2>/dev/null; then
+            : > "$timed_out_file"
+            kill "$command_pid" 2>/dev/null || true
+            sleep 1
+            kill -9 "$command_pid" 2>/dev/null || true
+        fi
+    ) &
+    watcher_pid="$!"
+
+    set +e
+    wait "$command_pid"
+    rc="$?"
+    set -e
+
+    kill "$watcher_pid" 2>/dev/null || true
+    wait "$watcher_pid" 2>/dev/null || true
+
+    cat "$stdout_file"
+    cat "$stderr_file" >&2
+
+    if [[ -f "$timed_out_file" && "$rc" -ge 128 ]]; then
+        rc=124
+    fi
+
+    return "$rc"
+}
+
+detect_installed_version() {
+    local timeout_seconds="${1:-5}"
+    local binary_path
+    local version_output
+    local version_status
+    local parsed_version
+
+    if ! binary_path="$(command -v "$BINARY_NAME")"; then
+        echo "unknown"
+        return 0
+    fi
+
+    set +e
+    version_output="$(run_with_timeout "$timeout_seconds" "$binary_path" --version 2>/dev/null)"
+    version_status="$?"
+    set -e
+
+    if [[ "$version_status" -ne 0 ]]; then
+        echo "unknown"
+        return 0
+    fi
+
+    parsed_version="$(printf '%s\n' "$version_output" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+    if [[ -z "$parsed_version" ]]; then
+        echo "unknown"
+    else
+        echo "$parsed_version"
+    fi
+}
+
+reset_agent_state_if_requested() {
+    if ! truthy_env "${IGRIS_RESET_STATE:-}"; then
+        return 0
+    fi
+
+    local state_file="${IGRIS_STATE_FILE:-/var/lib/igris/state.json}"
+    local state_dir
+    state_dir="$(dirname "$state_file")"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        rm -f "$state_file"
+        return 0
+    fi
+
+    if [[ -e "$state_file" ]]; then
+        rm -f "$state_file"
+        return 0
+    fi
+
+    if [[ -d "$state_dir" ]]; then
+        return 0
+    fi
+
+    ensure_sudo_available "reset persisted Igris registration state"
+    sudo rm -f "$state_file"
 }
 
 # ─── Download Binary ─────────────────────────────────────────────────────────
@@ -1305,7 +1420,7 @@ main() {
     local update_action=""   # "install" | "upgrade" | "downgrade" | "reinstall" | "skip"
     if command -v "$BINARY_NAME" &> /dev/null; then
         local current_version
-        current_version=$("$BINARY_NAME" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+        current_version="$(detect_installed_version 5)"
         local target_version="${VERSION#v}"
         target_version="${target_version#agent-}"
 
@@ -1388,8 +1503,12 @@ main() {
     # Verify installation
     if command -v "$BINARY_NAME" &> /dev/null; then
         local installed_version
-        installed_version=$("$BINARY_NAME" --version 2>/dev/null || echo "installed")
-        success "Verified: ${BINARY_NAME} ${installed_version}"
+        installed_version="$(detect_installed_version 5)"
+        if [[ "$installed_version" == "unknown" ]]; then
+            success "Verified: ${BINARY_NAME} installed"
+        else
+            success "Verified: ${BINARY_NAME} ${installed_version}"
+        fi
     fi
 
     # On the upgrade path the binary has been replaced in place. If a
@@ -1417,6 +1536,7 @@ main() {
             create_daemonized_runtime
         fi
     elif has_bootstrap_env; then
+        reset_agent_state_if_requested
         create_systemd_service true
         create_openrc_service true
         create_launchd_service true
