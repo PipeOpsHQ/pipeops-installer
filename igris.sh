@@ -616,12 +616,14 @@ run_with_timeout() {
     local timeout_seconds="$1"
     shift
 
-    local stdout_file stderr_file timed_out_file
+    local tmp_dir stdout_file stderr_file timed_out_file cleanup_cmd
     local command_pid watcher_pid rc
-    stdout_file="$(mktemp)"
-    stderr_file="$(mktemp)"
-    timed_out_file="$(mktemp)"
-    rm -f "$timed_out_file"
+    tmp_dir="$(mktemp -d)"
+    stdout_file="${tmp_dir}/stdout"
+    stderr_file="${tmp_dir}/stderr"
+    timed_out_file="${tmp_dir}/timed-out"
+    printf -v cleanup_cmd 'rm -rf -- %q; trap - RETURN' "$tmp_dir"
+    trap "$cleanup_cmd" RETURN
 
     "$@" >"$stdout_file" 2>"$stderr_file" &
     command_pid="$!"
@@ -648,27 +650,27 @@ run_with_timeout() {
     cat "$stdout_file"
     cat "$stderr_file" >&2
 
-    if [[ -f "$timed_out_file" ]]; then
+    if [[ -f "$timed_out_file" && "$rc" -ge 128 ]]; then
         rc=124
     fi
 
-    rm -f "$stdout_file" "$stderr_file" "$timed_out_file"
     return "$rc"
 }
 
 detect_installed_version() {
     local timeout_seconds="${1:-5}"
+    local binary_path
     local version_output
     local version_status
     local parsed_version
 
-    if ! command -v "$BINARY_NAME" &> /dev/null; then
+    if ! binary_path="$(command -v "$BINARY_NAME")"; then
         echo "unknown"
         return 0
     fi
 
     set +e
-    version_output="$(run_with_timeout "$timeout_seconds" "$BINARY_NAME" --version 2>/dev/null)"
+    version_output="$(run_with_timeout "$timeout_seconds" "$binary_path" --version 2>/dev/null)"
     version_status="$?"
     set -e
 
