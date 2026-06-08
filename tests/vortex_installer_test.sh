@@ -67,10 +67,51 @@ test_render_config_file() {
   grep -q '^capture_backend = "pcap"$' "$tmp" || fail "config missing capture backend"
 }
 
+test_get_latest_version_uses_highest_stable_release() {
+  gh_api_get() {
+    cat <<'JSON'
+[
+  {"tag_name":"v1.2.3"},
+  {"tag_name":"v9.0.0-rc1"},
+  {"tag_name":"v1.3.0"}
+]
+JSON
+  }
+
+  assert_eq "1.3.0" "$(get_latest_version)" "highest stable release"
+}
+
+test_get_latest_version_fails_without_stable_release() {
+  gh_api_get() {
+    printf '[{"tag_name":"v9.0.0-rc1"}]\n'
+  }
+
+  if (get_latest_version >/dev/null 2>/dev/null); then
+    fail "get_latest_version should fail closed when no stable semver tag exists"
+  fi
+}
+
+test_validate_tar_entries_rejects_symlink() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  mkdir -p "$tmp/payload"
+  ln -s /etc/passwd "$tmp/payload/vortex"
+  tar -czf "$tmp/payload.tar.gz" -C "$tmp/payload" .
+
+  if (validate_tar_entries "$tmp/payload.tar.gz" >/dev/null 2>/dev/null); then
+    fail "validate_tar_entries should reject symlink entries"
+  fi
+}
+
 test_normalize_version
 test_archive_candidates_include_normalized_and_legacy_names
 test_normalize_arch
 test_missing_gateway_requirements
 test_render_config_file
+test_get_latest_version_uses_highest_stable_release
+test_get_latest_version_fails_without_stable_release
+test_validate_tar_entries_rejects_symlink
 
 echo "ok"
