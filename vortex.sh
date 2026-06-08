@@ -210,7 +210,9 @@ compare_versions() {
   rhs="${rhs#v}"; rhs="${rhs%%-*}"; rhs="${rhs%%+*}"
 
   local IFS='.'
-  local a=($lhs) b=($rhs)
+  local a b
+  read -r -a a <<< "$lhs"
+  read -r -a b <<< "$rhs"
   local i max=${#a[@]}
   (( ${#b[@]} > max )) && max=${#b[@]}
   for (( i = 0; i < max; i++ )); do

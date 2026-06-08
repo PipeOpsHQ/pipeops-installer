@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export VORTEX_INSTALLER_SKIP_MAIN=1
-# shellcheck source=../vortex.sh
+# shellcheck source=vortex.sh
 source "${REPO_ROOT}/vortex.sh"
 
 fail() {
