@@ -31,18 +31,6 @@ if [[ "$(id -u)" -eq 0 ]] && ! command -v sudo >/dev/null 2>&1; then
     }
 fi
 
-# Keep temporary installer artifacts (script + env) from persisting across
-# failures, and ensure they are not left behind on normal exit.
-TMP_PATHS=()
-cleanup_tmp_paths() {
-  local path
-
-  for path in "${TMP_PATHS[@]:-}"; do
-    rm -rf "$path" || true
-  done
-}
-trap cleanup_tmp_paths EXIT
-
 # ─── Configuration ───────────────────────────────────────────────────────────
 REQUESTED_VERSION="${IGRIS_VERSION:-}"
 # Used only when public release discovery fails. Keep this pinned to a published
@@ -439,6 +427,7 @@ run_vortex_installer() {
     local installer_url="$1"
     shift
     local temp_dir temp_script env_file
+    local install_status=0
     local -a script_cmd
 
     if ! vortex_installer_host_allowed "$installer_url"; then
@@ -446,11 +435,14 @@ run_vortex_installer() {
     fi
 
     temp_dir="$(mktemp -d)"
-    TMP_PATHS+=("$temp_dir")
     temp_script="${temp_dir}/vortex.sh"
     env_file="${temp_dir}/vortex.env"
 
-    download_installer_script "$installer_url" "$temp_script" "${VORTEX_INSTALLER_SHA256:-}" || error "Failed to download Vortex installer from ${installer_url}"
+    if ! download_installer_script "$installer_url" "$temp_script" "${VORTEX_INSTALLER_SHA256:-}"; then
+        rm -rf "$temp_dir"
+        warn "Failed to download Vortex installer from ${installer_url}"
+        return 1
+    fi
     chmod 700 "$temp_script"
     write_env_file "$env_file" "$@"
 
@@ -462,6 +454,10 @@ run_vortex_installer() {
     fi
 
     "${script_cmd[@]}" 'set -a; . "$1"; set +a; exec bash "$2"' "$env_file" "$temp_script"
+    install_status=$?
+
+    rm -rf "$temp_dir"
+    return "$install_status"
 }
 
 install_bundled_vortex_if_needed() {
