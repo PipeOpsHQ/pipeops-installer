@@ -30,6 +30,19 @@
       </div>
 
       <div class="card">
+        <h2>Vortex Network Agent</h2>
+        <p>Install the Vortex network monitoring agent:</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/vortex.sh | bash</code></pre>
+        <p>Install with auto-enrollment (Linux systemd service):</p>
+        <pre><code>VORTEX_GATEWAY_URL=https://halo.example.com \
+VORTEX_BOOTSTRAP_TOKEN=xxx \
+VORTEX_WORKSPACE_ID=workspace-uuid \
+  curl -fsSL https://get.pipeops.dev/vortex.sh | bash</code></pre>
+        <p>Pin a specific version:</p>
+        <pre><code>VORTEX_VERSION=0.1.0 curl -fsSL https://get.pipeops.dev/vortex.sh | bash</code></pre>
+      </div>
+
+      <div class="card">
         <h2>CLI</h2>
         <p>Install the latest CLI:</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/cli.sh | bash</code></pre>
