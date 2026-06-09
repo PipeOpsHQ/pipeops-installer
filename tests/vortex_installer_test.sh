@@ -67,6 +67,47 @@ test_render_config_file() {
   grep -q '^capture_backend = "pcap"$' "$tmp" || fail "config missing capture backend"
 }
 
+test_get_latest_version_uses_highest_stable_release() {
+  gh_api_get() {
+    cat <<'JSON'
+[
+  {
+    "tag_name": "v1.2.3",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v9.0.0-rc1",
+    "draft": false,
+    "prerelease": true
+  },
+  {
+    "tag_name": "v1.4.0",
+    "draft": true,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v1.3.0",
+    "draft": false,
+    "prerelease": false
+  }
+]
+JSON
+  }
+
+  assert_eq "1.3.0" "$(get_latest_version)" "highest stable release"
+}
+
+test_get_latest_version_fails_without_stable_release() {
+  gh_api_get() {
+    printf '[{"tag_name": "v9.0.0-rc1", "draft": false, "prerelease": true}]\n'
+  }
+
+  if (get_latest_version >/dev/null 2>/dev/null); then
+    fail "get_latest_version should fail closed when no stable semver tag exists"
+  fi
+}
+
 test_validate_metrics_port() {
   if (validate_metrics_port "abc" >/dev/null 2>&1); then
     fail "validate_metrics_port should reject non-numeric values"
@@ -79,12 +120,144 @@ test_validate_metrics_port() {
   validate_metrics_port "9090" >/dev/null
 }
 
-test_validate_iface() {
-  validate_iface "eth0.10" >/dev/null
+test_validate_tar_entries_rejects_symlink() {
+  local fake_archive="/tmp/fake-vortex-symlink.tar.gz"
+  local original_tar
+  original_tar="$(type -p tar)"
+  is_gnu_tar() { return 0; }
 
-  if (validate_iface $'eth0\nmalicious=true' >/dev/null 2>&1); then
-    fail "validate_iface should reject newline injection"
+  tar() {
+    local arg
+    local has_tf=0
+    local has_tvf=0
+
+    for arg in "$@"; do
+      if [[ "$arg" == "-tf" ]]; then
+        has_tf=1
+      elif [[ "$arg" == "-tvf" ]]; then
+        has_tvf=1
+      fi
+    done
+
+    if (( has_tf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf 'vortex\n'
+      return 0
+    fi
+
+    if (( has_tvf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf 'lwrwxrwxrwx root/root 0 2026-06-08 00:00 vortex -> /etc/passwd\n'
+      return 0
+    fi
+
+    "$original_tar" "$@"
+  }
+
+  if (validate_tar_entries "$fake_archive" >/dev/null 2>/dev/null); then
+    fail "validate_tar_entries should reject symlink entries"
   fi
+
+  unset -f is_gnu_tar
+  unset -f tar
+}
+
+test_validate_tar_entries_rejects_absolute_paths() {
+  local fake_archive="/tmp/fake-vortex-absolute.tar.gz"
+  local original_tar
+  original_tar="$(type -p tar)"
+
+  tar() {
+    local arg
+    local has_tf=0
+    local has_tvf=0
+
+    for arg in "$@"; do
+      if [[ "$arg" == "-tf" ]]; then
+        has_tf=1
+      elif [[ "$arg" == "-tvf" ]]; then
+        has_tvf=1
+      fi
+    done
+
+    if (( has_tf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf '/etc/passwd\n'
+      return 0
+    fi
+
+    if (( has_tvf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf '-rw-r--r-- root/root 0 2026-06-08 00:00 /etc/passwd\n'
+      return 0
+    fi
+
+    "$original_tar" "$@"
+  }
+
+  if (validate_tar_entries "$fake_archive" >/dev/null 2>/dev/null); then
+    fail "validate_tar_entries should reject absolute-path entries"
+  fi
+
+  unset -f tar
+}
+
+test_validate_tar_entries_rejects_traversal_paths() {
+  local fake_archive="/tmp/fake-vortex-traversal.tar.gz"
+  local original_tar
+  original_tar="$(type -p tar)"
+
+  tar() {
+    local arg
+    local has_tf=0
+    local has_tvf=0
+
+    for arg in "$@"; do
+      if [[ "$arg" == "-tf" ]]; then
+        has_tf=1
+      elif [[ "$arg" == "-tvf" ]]; then
+        has_tvf=1
+      fi
+    done
+
+    if (( has_tf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf '../etc/passwd\n'
+      return 0
+    fi
+
+    if (( has_tvf )) && [[ "${*: -1}" == "$fake_archive" ]]; then
+      printf '-rw-r--r-- root/root 0 2026-06-08 00:00 ../etc/passwd\n'
+      return 0
+    fi
+
+    "$original_tar" "$@"
+  }
+
+  if (validate_tar_entries "$fake_archive" >/dev/null 2>/dev/null); then
+    fail "validate_tar_entries should reject directory traversal entries"
+  fi
+
+  unset -f tar
+}
+
+test_has_vortex_enrollment_env() {
+  unset VORTEX_GATEWAY_URL VORTEX_BOOTSTRAP_TOKEN VORTEX_TOKEN VORTEX_WORKSPACE_ID VORTEX_TENANT_ID VORTEX_ORG_ID
+  if has_vortex_enrollment_env; then
+    fail "has_vortex_enrollment_env should not trigger when only TOKEN/GATEWAY_URL aliases are set"
+  fi
+
+  TOKEN="abc"
+  export TOKEN
+  if has_vortex_enrollment_env; then
+    fail "has_vortex_enrollment_env should ignore generic alias env vars"
+  fi
+  TOKEN=""
+  export TOKEN
+
+  VORTEX_BOOTSTRAP_TOKEN="abc"
+  export VORTEX_BOOTSTRAP_TOKEN
+  if ! has_vortex_enrollment_env; then
+    fail "has_vortex_enrollment_env should trigger when VORTEX_* vars are set"
+  fi
+
+  unset TOKEN
+  unset VORTEX_BOOTSTRAP_TOKEN
 }
 
 test_normalize_version
@@ -92,7 +265,12 @@ test_archive_candidates_include_normalized_and_legacy_names
 test_normalize_arch
 test_missing_gateway_requirements
 test_render_config_file
+test_get_latest_version_uses_highest_stable_release
+test_get_latest_version_fails_without_stable_release
+test_validate_tar_entries_rejects_symlink
+test_validate_tar_entries_rejects_absolute_paths
+test_validate_tar_entries_rejects_traversal_paths
 test_validate_metrics_port
-test_validate_iface
+test_has_vortex_enrollment_env
 
 echo "ok"

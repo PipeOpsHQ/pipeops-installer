@@ -49,7 +49,7 @@ IGRIS_SERVICE_STARTED="false"
 GITHUB_TOKEN_VALUE="${IGRIS_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
 VORTEX_INSTALLER_ALLOWED_HOSTS="${VORTEX_INSTALLER_ALLOWED_HOSTS:-get.pipeops.dev}"
 DEFAULT_VORTEX_INSTALLER_URL="https://get.pipeops.dev/vortex.sh"
-DEFAULT_VORTEX_INSTALLER_SHA256="e92b509ad6416f50f0be578b5040162fb739f0de69f4713850e68251cb100312"
+DEFAULT_VORTEX_INSTALLER_SHA256="18e4da8407705962672f4a697f26497203626ff6db065a8e75660b5aa5ad2b06"
 
 # Colors for output
 RED=$'\033[0;31m'
@@ -409,7 +409,8 @@ should_install_bundled_vortex() {
         return 0
     fi
 
-    error "Unsupported INSTALL_VORTEX/IGRIS_INSTALL_VORTEX value: ${setting}"
+    warn "Unsupported INSTALL_VORTEX/IGRIS_INSTALL_VORTEX value '${setting}'; skipping bundled network agent install."
+    return 1
 }
 
 build_vortex_env_lines() {

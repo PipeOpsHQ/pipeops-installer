@@ -24,5 +24,11 @@ jobs:
         run: |
           bash tests/igris_vortex_bundle_test.sh
           bash tests/vortex_installer_test.sh
+      - name: Verify bundled Vortex installer checksum pin
+        run: |
+          expected="$(sed -n 's/^DEFAULT_VORTEX_INSTALLER_SHA256="\([a-f0-9]*\)"/\1/p' igris.sh)"
+          actual="$(sha256sum vortex.sh | awk '{print $1}')"
+          test -n "$expected"
+          test "$expected" = "$actual"
       - name: ShellCheck
         run: shellcheck -x -e SC2009,SC2064,SC2162 igris.sh vortex.sh tests/igris_vortex_bundle_test.sh tests/vortex_installer_test.sh

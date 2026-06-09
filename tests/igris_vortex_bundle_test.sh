@@ -94,6 +94,18 @@ test_skips_vortex_when_disabled() {
     INSTALL_VORTEX=false
 }
 
+test_skips_vortex_for_unsupported_setting() {
+  assert_should_not_install \
+    "unsupported install setting skips bundled Vortex" \
+    IGRIS_INSTALLER_SKIP_MAIN=1 \
+    IGRIS_TEST_OS=Linux \
+    GATEWAY_URL=https://gateway.example.com \
+    TOKEN=hsk_test \
+    WORKSPACE_ID=workspace-1 \
+    MODE=host \
+    INSTALL_VORTEX=maybe
+}
+
 test_skips_vortex_without_workspace() {
   assert_should_not_install \
     "workspace is required for Vortex enrollment" \
@@ -245,6 +257,7 @@ test_install_hook_invokes_vortex_installer() {
 test_defaults_to_vortex_for_linux_host_bootstrap
 test_skips_vortex_for_non_host_modes
 test_skips_vortex_when_disabled
+test_skips_vortex_for_unsupported_setting
 test_skips_vortex_without_workspace
 test_builds_vortex_env_from_igris_context
 test_vortex_installer_host_allowlist

@@ -8,11 +8,11 @@
 #   VORTEX_INSTALL_DIR     - Binary install directory (default: /usr/local/bin)
 #   VORTEX_RELEASE_REPO    - GitHub release repo (default: PipeOpsHQ/vortex)
 #   VORTEX_GITHUB_TOKEN    - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
-#   VORTEX_GATEWAY_URL     - Gateway URL (alias: GATEWAY_URL)
-#   VORTEX_BOOTSTRAP_TOKEN - Agent bootstrap JWT/API key/service key (aliases: VORTEX_TOKEN, TOKEN, IGRIS_AGENT_TOKEN)
-#   VORTEX_WORKSPACE_ID    - Workspace ID/UUID (alias: WORKSPACE_ID)
-#   VORTEX_TENANT_ID       - Optional tenant ID/UUID (alias: TENANT_ID)
-#   VORTEX_ORG_ID          - Optional organization ID/UUID (alias: ORG_ID)
+#   VORTEX_GATEWAY_URL     - Gateway URL
+#   VORTEX_BOOTSTRAP_TOKEN - Agent bootstrap JWT/API key/service key (alias: VORTEX_TOKEN)
+#   VORTEX_WORKSPACE_ID    - Workspace ID/UUID
+#   VORTEX_TENANT_ID       - Optional tenant ID/UUID
+#   VORTEX_ORG_ID          - Optional organization ID/UUID
 #   VORTEX_IFACE           - Network interface to monitor (default: default route device or eth0)
 #   VORTEX_CAPTURE_BACKEND - auto, ebpf, or pcap (default: auto)
 #   VORTEX_IPS_MODE        - true/false (default: false)
@@ -22,20 +22,33 @@
 
 set -Eeuo pipefail
 
-if [[ "$(id -u)" -eq 0 ]] && ! command -v sudo >/dev/null 2>&1; then
-  sudo() {
-    "$@"
-  }
+SUDO=()
+if [[ "$(id -u)" -ne 0 ]]; then
+  SUDO=(sudo)
 fi
 
+TMP_PATHS=()
+cleanup_tmp_paths() {
+  local path
+  if (( ${#TMP_PATHS[@]} == 0 )); then
+    return 0
+  fi
+
+  for path in "${TMP_PATHS[@]:-}"; do
+    rm -rf -- "$path"
+  done
+}
+trap cleanup_tmp_paths EXIT
+
 REQUESTED_VERSION="${VORTEX_VERSION:-}"
-VERSION="0.1.0"
 INSTALL_DIR="${VORTEX_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="vortex"
 REPO="${VORTEX_RELEASE_REPO:-PipeOpsHQ/vortex}"
 GITHUB_URL="https://github.com/${REPO}"
 RELEASES_URL="${GITHUB_URL}/releases"
 SERVICE_STARTED="false"
+VORTEX_SERVICE_USER="${VORTEX_SERVICE_USER:-vortex}"
+VORTEX_SERVICE_GROUP="${VORTEX_SERVICE_GROUP:-$VORTEX_SERVICE_USER}"
 
 GITHUB_TOKEN_VALUE="${VORTEX_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
 
@@ -74,9 +87,23 @@ ensure_sudo_available() {
   fi
 
   info "Requesting sudo access to ${reason}..."
-  if ! sudo -v; then
+  if ! "${SUDO[@]}" -v; then
     error "sudo authentication failed; cannot ${reason}."
   fi
+}
+
+make_tmp_dir() {
+  local dir
+  dir="$(mktemp -d)"
+  TMP_PATHS+=("$dir")
+  printf '%s' "$dir"
+}
+
+make_tmp_file() {
+  local file
+  file="$(mktemp)"
+  TMP_PATHS+=("$file")
+  printf '%s' "$file"
 }
 
 get_first_env() {
@@ -94,23 +121,23 @@ get_first_env() {
 }
 
 resolve_gateway_url() {
-  get_first_env VORTEX_GATEWAY_URL GATEWAY_URL || true
+  get_first_env VORTEX_GATEWAY_URL || true
 }
 
 resolve_bootstrap_token() {
-  get_first_env VORTEX_BOOTSTRAP_TOKEN VORTEX_TOKEN TOKEN IGRIS_AGENT_TOKEN IGRIS_TOKEN || true
+  get_first_env VORTEX_BOOTSTRAP_TOKEN VORTEX_TOKEN TOKEN || true
 }
 
 resolve_workspace_id() {
-  get_first_env VORTEX_WORKSPACE_ID WORKSPACE_ID IGRIS_WORKSPACE_ID || true
+  get_first_env VORTEX_WORKSPACE_ID WORKSPACE_ID || true
 }
 
 resolve_tenant_id() {
-  get_first_env VORTEX_TENANT_ID TENANT_ID IGRIS_TENANT_ID || true
+  get_first_env VORTEX_TENANT_ID TENANT_ID || true
 }
 
 resolve_org_id() {
-  get_first_env VORTEX_ORG_ID ORG_ID IGRIS_ORG_ID || true
+  get_first_env VORTEX_ORG_ID ORG_ID || true
 }
 
 truthy() {
@@ -153,14 +180,14 @@ resolve_iface() {
   printf '%s' "${iface:-eth0}"
 }
 
-has_gateway_env() {
-  [[ -n "$(resolve_gateway_url)" || -n "$(resolve_bootstrap_token)" || -n "$(resolve_workspace_id)" || -n "$(resolve_tenant_id)" || -n "$(resolve_org_id)" ]]
+has_vortex_enrollment_env() {
+  [[ -n "${VORTEX_GATEWAY_URL:-}" || -n "${VORTEX_BOOTSTRAP_TOKEN:-}" || -n "${VORTEX_TOKEN:-}" || -n "${VORTEX_WORKSPACE_ID:-}" || -n "${VORTEX_TENANT_ID:-}" || -n "${VORTEX_ORG_ID:-}" ]]
 }
 
 missing_gateway_requirements() {
   local missing=()
 
-  [[ -z "$(resolve_gateway_url)" ]] && missing+=("VORTEX_GATEWAY_URL/GATEWAY_URL")
+  [[ -z "$(resolve_gateway_url)" ]] && missing+=("VORTEX_GATEWAY_URL")
   [[ -z "$(resolve_bootstrap_token)" ]] && missing+=("VORTEX_BOOTSTRAP_TOKEN/TOKEN")
   [[ -z "$(resolve_workspace_id)" ]] && missing+=("VORTEX_WORKSPACE_ID/WORKSPACE_ID")
 
@@ -261,36 +288,112 @@ gh_api_get() {
 
   if command -v curl >/dev/null 2>&1; then
     if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
-      curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN_VALUE}" -H "Accept: application/vnd.github+json" "$url"
+      curl -fsS --proto '=https' --tlsv1.2 \
+        -H "Authorization: Bearer ${GITHUB_TOKEN_VALUE}" \
+        -H "Accept: application/vnd.github+json" \
+        "$url"
     else
-      curl -fsSL -H "Accept: application/vnd.github+json" "$url"
+      curl -fsS --proto '=https' --tlsv1.2 \
+        -H "Accept: application/vnd.github+json" \
+        "$url"
     fi
   elif command -v wget >/dev/null 2>&1; then
     if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
-      wget -qO- --header="Authorization: Bearer ${GITHUB_TOKEN_VALUE}" --header="Accept: application/vnd.github+json" "$url"
+      wget -qO- --https-only --secure-protocol=TLSv1_2 \
+        --header="Authorization: Bearer ${GITHUB_TOKEN_VALUE}" \
+        --header="Accept: application/vnd.github+json" \
+        "$url"
     else
-      wget -qO- --header="Accept: application/vnd.github+json" "$url"
+      wget -qO- --https-only --secure-protocol=TLSv1_2 \
+        --header="Accept: application/vnd.github+json" \
+        "$url"
     fi
   else
     error "Neither curl nor wget found. Please install one of them."
   fi
 }
 
+validate_https_url() {
+  local url="$1"
+  case "$url" in
+    https://*) ;;
+    *) error "Refusing non-HTTPS download URL: ${url}" ;;
+  esac
+}
+
+is_allowed_download_host() {
+  local url="$1"
+  local host
+
+  host="${url#https://}"
+  host="${host%%/*}"
+
+  case "$host" in
+    github.com | api.github.com | uploads.github.com | *.github.com | *.githubusercontent.com)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+curl_download_with_token() {
+  local url="$1" out="$2" accept="$3" token="${4:-}"
+  local headers tmp_body status redirect_url
+  local headers_args=()
+
+  headers="$(make_tmp_file)"
+  tmp_body="$(make_tmp_file)"
+
+  if [[ -n "$token" ]]; then
+    headers_args=(-H "Authorization: Bearer ${token}" -H "Accept: ${accept}")
+  else
+    headers_args=(-H "Accept: ${accept}")
+  fi
+
+  status="$(curl -fsS --proto '=https' --tlsv1.2 \
+    -w '%{http_code}' \
+    -D "$headers" \
+    "${headers_args[@]}" \
+    -o "$tmp_body" \
+    "$url")" || return 1
+
+  if [[ "$status" =~ ^2 ]]; then
+    mv "$tmp_body" "$out"
+    return 0
+  fi
+
+  if [[ "$status" =~ ^3 ]]; then
+    redirect_url="$(awk 'BEGIN{IGNORECASE=1} /^location:/ {sub(/\r$/, "", $0); sub(/^[Ll]ocation:[[:space:]]*/, "", $0); print; exit}' "$headers")"
+    [[ -n "$redirect_url" ]] || return 1
+    validate_https_url "$redirect_url"
+    if ! is_allowed_download_host "$redirect_url"; then
+      error "Refusing download redirect from unexpected host: ${redirect_url}"
+    fi
+    curl -fsS --proto '=https' --proto-redir '=https' --tlsv1.2 -H "Accept: ${accept}" -o "$out" "$redirect_url"
+    return
+  fi
+
+  return 1
+}
+
 gh_download_file() {
   local url="$1" out="$2"
 
+  validate_https_url "$url"
+  if ! is_allowed_download_host "$url"; then
+    error "Refusing download from unexpected host: ${url}"
+  fi
+
   if command -v curl >/dev/null 2>&1; then
     if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
-      curl -fL -H "Authorization: Bearer ${GITHUB_TOKEN_VALUE}" -H "Accept: application/octet-stream" -o "$out" "$url"
+      curl_download_with_token "$url" "$out" "application/octet-stream" "${GITHUB_TOKEN_VALUE}"
     else
-      curl -fsSL -o "$out" "$url"
+      curl_download_with_token "$url" "$out" "application/octet-stream"
     fi
   elif command -v wget >/dev/null 2>&1; then
-    if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
-      wget -q --header="Authorization: Bearer ${GITHUB_TOKEN_VALUE}" --header="Accept: application/octet-stream" -O "$out" "$url"
-    else
-      wget -q -O "$out" "$url"
-    fi
+    error "curl is required for Vortex release downloads so redirects can be host-validated."
   else
     error "Neither curl nor wget found. Please install one of them."
   fi
@@ -298,24 +401,48 @@ gh_download_file() {
 
 get_latest_version() {
   local latest=""
+  local releases_json
   local tag
   local candidate
+  local draft
+  local line
+  local prerelease
 
-  while IFS= read -r tag; do
-    candidate="$(normalize_version "$tag")"
-    if [[ -z "$latest" || "$(compare_versions "$latest" "$candidate")" == "lt" ]]; then
-      latest="$candidate"
+  releases_json="$(gh_api_get "https://api.github.com/repos/${REPO}/releases?per_page=100")" \
+    || error "Could not resolve the latest Vortex version from ${REPO}."
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ \"tag_name\"[[:space:]]*:[[:space:]]*\"(v[0-9]+\.[0-9]+\.[0-9]+)\" ]]; then
+      tag="${BASH_REMATCH[1]}"
+      draft=""
+      prerelease=""
     fi
-  done < <(gh_api_get "https://api.github.com/repos/${REPO}/releases?per_page=100" 2>/dev/null \
-    | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' \
-    | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)".*/\1/' || true)
+
+    if [[ -n "${tag:-}" && "$line" =~ \"draft\"[[:space:]]*:[[:space:]]*(true|false) ]]; then
+      draft="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ -n "${tag:-}" && "$line" =~ \"prerelease\"[[:space:]]*:[[:space:]]*(true|false) ]]; then
+      prerelease="${BASH_REMATCH[1]}"
+
+      if [[ "$draft" == "false" && "$prerelease" == "false" ]]; then
+        candidate="$(normalize_version "$tag")"
+        if [[ -z "$latest" || "$(compare_versions "$latest" "$candidate")" == "lt" ]]; then
+          latest="$candidate"
+        fi
+      fi
+
+      tag=""
+      draft=""
+      prerelease=""
+    fi
+  done < <(printf '%s\n' "$releases_json")
 
   if [[ -z "$latest" ]]; then
-    warn "Could not resolve the latest Vortex version from ${REPO}. Falling back to default: ${VERSION}"
-    echo "$VERSION"
-  else
-    echo "$latest"
+    error "Could not parse a stable vMAJOR.MINOR.PATCH release from ${REPO}; refusing to guess a version."
   fi
+
+  echo "$latest"
 }
 
 checksum_expected_for() {
@@ -325,21 +452,50 @@ checksum_expected_for() {
   awk -v f="$filename" '($2 == f || $2 == "*" f) { print $1; exit }' "$checksums_file"
 }
 
+is_gnu_tar() {
+  tar --version 2>/dev/null | grep -qi 'gnu'
+}
+
+validate_extracted_payload_no_links() {
+  local dir="$1"
+  local symlink_entry
+
+  symlink_entry="$(find "$dir" -type l -print -quit 2>/dev/null || true)"
+  if [[ -n "$symlink_entry" ]]; then
+    error "Refusing to extract archive with symlink entry: ${symlink_entry}"
+  fi
+}
+
 validate_tar_entries() {
   local archive="$1"
   local entry
+  local listing
+  local entry_type
 
   while IFS= read -r entry; do
     case "$entry" in
-      /*|..|../*|*/../*|*/..)
+      /*|../*|*'/../'*|*'/..' )
         error "Refusing to extract unsafe archive entry: ${entry}"
         ;;
     esac
-  done < <(tar -tzf "$archive")
+  done < <(tar -tf "$archive")
+
+  is_gnu_tar || return 0
+
+  while IFS= read -r listing; do
+    entry_type="${listing%% *}"
+    entry_type="${entry_type:0:1}"
+
+    case "$entry_type" in
+      l|h)
+        error "Refusing to extract archive with link entry: ${listing}"
+        ;;
+    esac
+  done < <(LC_ALL=C tar -tvf "$archive")
 }
 
 validate_metrics_port() {
-  local metrics_port="${1:-}"
+  local metrics_port="${1}"
 
   if ! [[ "$metrics_port" =~ ^[0-9]+$ ]]; then
     error "VORTEX_METRICS_PORT must be a non-negative integer."
@@ -347,14 +503,6 @@ validate_metrics_port() {
 
   if (( metrics_port > 65535 )); then
     error "VORTEX_METRICS_PORT must be between 0 and 65535."
-  fi
-}
-
-validate_iface() {
-  local iface="${1:-}"
-
-  if ! [[ "$iface" =~ ^[A-Za-z0-9._:-]+$ ]]; then
-    error "VORTEX_IFACE contains unsupported characters."
   fi
 }
 
@@ -371,9 +519,9 @@ install_release_payload() {
   [[ -n "$ebpf" ]] || error "Downloaded archive did not contain vortex-ebpf."
 
   ensure_sudo_available "install Vortex"
-  sudo mkdir -p "$install_dir" /usr/lib/vortex /etc/vortex /var/lib/vortex /var/log/vortex
-  sudo install -m 0755 "$binary" "${install_dir}/${BINARY_NAME}"
-  sudo install -m 0644 "$ebpf" /usr/lib/vortex/vortex-ebpf
+  "${SUDO[@]}" mkdir -p "$install_dir" /usr/lib/vortex /etc/vortex /var/lib/vortex /var/log/vortex
+  "${SUDO[@]}" install -m 0755 "$binary" "${install_dir}/${BINARY_NAME}"
+  "${SUDO[@]}" install -m 0644 "$ebpf" /usr/lib/vortex/vortex-ebpf
 }
 
 download_and_install() {
@@ -390,9 +538,7 @@ download_and_install() {
   version="$(normalize_version "$version")"
   tag="$(release_tag_for_version "$version")"
   checksum_url="${RELEASES_URL}/download/${tag}/checksums.txt"
-  tmp_dir="$(mktemp -d)"
-
-  trap 'rm -rf "$tmp_dir"' RETURN
+  tmp_dir="$(make_tmp_dir)"
 
   info "Downloading Vortex v${version} for ${platform}..."
   gh_download_file "$checksum_url" "${tmp_dir}/checksums.txt" || error "Failed to download checksum manifest: ${checksum_url}"
@@ -423,6 +569,7 @@ download_and_install() {
 
   validate_tar_entries "${tmp_dir}/${selected}"
   tar --no-same-owner --no-same-permissions -xzf "${tmp_dir}/${selected}" -C "$tmp_dir"
+  validate_extracted_payload_no_links "$tmp_dir"
   install_release_payload "$tmp_dir" "$INSTALL_DIR"
 
   success "Vortex installed successfully."
@@ -496,15 +643,67 @@ write_config_file() {
   local ips_mode="$8"
   local metrics_port="$9"
   local tmp_config
+  local old_umask
 
-  tmp_config="$(mktemp)"
-  trap 'rm -f "$tmp_config"' RETURN
+  old_umask="$(umask)"
+  umask 077
+  tmp_config="$(make_tmp_file)"
+  umask "$old_umask"
 
   render_config_file "$tmp_config" "$gateway_url" "$bootstrap_token" "$workspace_id" "$tenant_id" "$org_id" "$iface" "$capture_backend" "$ips_mode" "$metrics_port"
 
   ensure_sudo_available "write Vortex configuration"
-  sudo mkdir -p /etc/vortex
-  sudo install -m 0600 "$tmp_config" /etc/vortex/config.toml
+  "${SUDO[@]}" mkdir -p /etc/vortex
+  "${SUDO[@]}" install -m 0640 "$tmp_config" /etc/vortex/config.toml
+  "${SUDO[@]}" chown "root:${VORTEX_SERVICE_GROUP}" /etc/vortex/config.toml
+}
+
+ensure_vortex_service_user() {
+  local home_dir
+
+  if [[ "$VORTEX_SERVICE_USER" == "root" ]]; then
+    return 0
+  fi
+
+  if id -u "$VORTEX_SERVICE_USER" >/dev/null 2>&1; then
+    if ! getent group "$VORTEX_SERVICE_GROUP" >/dev/null 2>&1; then
+      error "Service group ${VORTEX_SERVICE_GROUP} does not exist for existing user ${VORTEX_SERVICE_USER}."
+    fi
+    return 0
+  fi
+
+  if ! getent group "$VORTEX_SERVICE_GROUP" >/dev/null 2>&1; then
+    if command -v groupadd >/dev/null 2>&1; then
+      groupadd --system "$VORTEX_SERVICE_GROUP" || error "Failed to create service group ${VORTEX_SERVICE_GROUP}."
+    elif ! command -v addgroup >/dev/null 2>&1; then
+      error "No supported tool available to create service group ${VORTEX_SERVICE_GROUP}."
+    else
+      addgroup --system "$VORTEX_SERVICE_GROUP" || error "Failed to create service group ${VORTEX_SERVICE_GROUP}."
+    fi
+  fi
+
+  home_dir="/var/lib/vortex"
+  if command -v useradd >/dev/null 2>&1; then
+    useradd \
+      --system \
+      --home-dir "$home_dir" \
+      --shell /usr/sbin/nologin \
+      --create-home \
+      --gid "$VORTEX_SERVICE_GROUP" \
+      "$VORTEX_SERVICE_USER" || error "Failed to create service user ${VORTEX_SERVICE_USER}."
+    return 0
+  fi
+
+  if command -v adduser >/dev/null 2>&1; then
+    adduser --system \
+      --home "$home_dir" \
+      --shell /usr/sbin/nologin \
+      --ingroup "$VORTEX_SERVICE_GROUP" \
+      "$VORTEX_SERVICE_USER" || error "Failed to create service user ${VORTEX_SERVICE_USER}."
+    return 0
+  fi
+
+  error "Cannot create service user ${VORTEX_SERVICE_USER}; please create it manually."
 }
 
 systemd_available() {
@@ -512,35 +711,50 @@ systemd_available() {
 }
 
 verify_systemd_service_active() {
-  if sudo systemctl is-active --quiet vortex; then
+  if "${SUDO[@]}" systemctl is-active --quiet vortex; then
     success "vortex systemd service is active."
     return
   fi
 
   warn "systemd accepted the unit, but vortex is not active."
-  sudo systemctl status vortex --no-pager -l || true
-  sudo journalctl -u vortex -n 80 --no-pager || true
+  "${SUDO[@]}" systemctl status vortex --no-pager -l || true
+  "${SUDO[@]}" journalctl -u vortex -n 80 --no-pager || true
   error "vortex service failed to start."
 }
 
 create_systemd_service() {
   local service_file="/etc/systemd/system/vortex.service"
+  local service_user
+  local capability_lines
 
   systemd_available || return 1
 
   ensure_sudo_available "install Vortex systemd service"
+  ensure_vortex_service_user
+  service_user="${VORTEX_SERVICE_USER}"
+  if [[ "$service_user" == "root" ]]; then
+    warn "VORTEX_SERVICE_USER is root; skipping AmbientCapabilities for safety."
+    capability_lines='CapabilityBoundingSet=CAP_NET_ADMIN CAP_BPF CAP_PERFMON'
+  else
+    capability_lines='AmbientCapabilities=CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_BPF CAP_PERFMON'
+  fi
+
   info "Creating systemd service at ${service_file}..."
 
-  sudo tee "$service_file" >/dev/null <<EOF
+  "${SUDO[@]}" tee "$service_file" >/dev/null <<EOF
 [Unit]
 Description=Vortex Network Security Agent
 Documentation=https://github.com/${REPO}
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
-User=root
+User=${service_user}
+Group=${VORTEX_SERVICE_GROUP}
 WorkingDirectory=/var/lib/vortex
 ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config /etc/vortex/config.toml
 Restart=always
@@ -548,12 +762,15 @@ RestartSec=10
 TimeoutStopSec=15
 KillMode=mixed
 LimitMEMLOCK=infinity
-AmbientCapabilities=CAP_NET_ADMIN CAP_BPF CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_BPF CAP_SYS_ADMIN
-NoNewPrivileges=false
+${capability_lines}
+NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 ReadWritePaths=/var/lib/vortex /var/log/vortex /run/vortex
 StandardOutput=journal
 StandardError=journal
@@ -563,12 +780,13 @@ SyslogIdentifier=vortex
 WantedBy=multi-user.target
 EOF
 
-  sudo mkdir -p /var/lib/vortex /var/log/vortex
-  sudo chmod 700 /var/lib/vortex
-  sudo chmod 755 /var/log/vortex
-  sudo systemctl daemon-reload
-  sudo systemctl enable vortex
-  sudo systemctl restart vortex
+  "${SUDO[@]}" mkdir -p /var/lib/vortex /var/log/vortex
+  "${SUDO[@]}" chown "${service_user}:${VORTEX_SERVICE_GROUP}" /var/lib/vortex /var/log/vortex
+  "${SUDO[@]}" chmod 700 /var/lib/vortex
+  "${SUDO[@]}" chmod 750 /var/log/vortex
+  "${SUDO[@]}" systemctl daemon-reload
+  "${SUDO[@]}" systemctl enable vortex
+  "${SUDO[@]}" systemctl restart vortex
   verify_systemd_service_active
 
   SERVICE_STARTED="true"
@@ -581,13 +799,13 @@ should_install_service() {
     return 0
   fi
 
-  if has_gateway_env; then
+  if has_vortex_enrollment_env; then
     return 0
   fi
 
-  if [[ -t 0 ]]; then
+  if [[ -r /dev/tty ]]; then
     local reply
-    read -r -p "Would you like to install Vortex as a systemd service? [y/N] " reply
+    read -r -p "Would you like to install Vortex as a systemd service? [y/N] " reply < /dev/tty
     [[ "$reply" =~ ^[Yy]$ ]]
     return
   fi
@@ -609,7 +827,7 @@ install_service_if_requested() {
 
   should_install_service || return
 
-  if has_gateway_env; then
+  if has_vortex_enrollment_env; then
     missing="$(missing_gateway_requirements)"
     if [[ -n "$missing" ]]; then
       error "Cannot configure Vortex enrollment; missing required env vars: ${missing}"
@@ -622,7 +840,6 @@ install_service_if_requested() {
   tenant_id="$(resolve_tenant_id)"
   org_id="$(resolve_org_id)"
   iface="$(resolve_iface)"
-  validate_iface "$iface"
   capture_backend="${VORTEX_CAPTURE_BACKEND:-auto}"
   ips_mode="${VORTEX_IPS_MODE:-false}"
   metrics_port="${VORTEX_METRICS_PORT:-9090}"
