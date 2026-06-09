@@ -187,7 +187,7 @@ has_vortex_enrollment_env() {
 missing_gateway_requirements() {
   local missing=()
 
-  [[ -z "$(resolve_gateway_url)" ]] && missing+=("VORTEX_GATEWAY_URL/GATEWAY_URL")
+  [[ -z "$(resolve_gateway_url)" ]] && missing+=("VORTEX_GATEWAY_URL")
   [[ -z "$(resolve_bootstrap_token)" ]] && missing+=("VORTEX_BOOTSTRAP_TOKEN/TOKEN")
   [[ -z "$(resolve_workspace_id)" ]] && missing+=("VORTEX_WORKSPACE_ID/WORKSPACE_ID")
 
@@ -393,11 +393,7 @@ gh_download_file() {
       curl_download_with_token "$url" "$out" "application/octet-stream"
     fi
   elif command -v wget >/dev/null 2>&1; then
-    if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
-      error "curl is required for authenticated Vortex release downloads so GitHub tokens are not forwarded across redirects."
-    else
-      wget -q --https-only --secure-protocol=TLSv1_2 -O "$out" "$url"
-    fi
+    error "curl is required for Vortex release downloads so redirects can be host-validated."
   else
     error "Neither curl nor wget found. Please install one of them."
   fi
@@ -408,24 +404,39 @@ get_latest_version() {
   local releases_json
   local tag
   local candidate
-  local release_obj
+  local draft
+  local line
+  local prerelease
 
   releases_json="$(gh_api_get "https://api.github.com/repos/${REPO}/releases?per_page=100")" \
     || error "Could not resolve the latest Vortex version from ${REPO}."
 
-  while IFS= read -r release_obj; do
-    [[ -z "$release_obj" ]] && continue
-    [[ "$release_obj" == *"\"draft\":false"* ]] || continue
-    [[ "$release_obj" == *"\"prerelease\":false"* ]] || continue
-
-    tag="$(printf '%s' "$release_obj" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)".*/\1/' || true)"
-    [[ -n "$tag" ]] || continue
-
-    candidate="$(normalize_version "$tag")"
-    if [[ -z "$latest" || "$(compare_versions "$latest" "$candidate")" == "lt" ]]; then
-      latest="$candidate"
+  while IFS= read -r line; do
+    if [[ "$line" =~ \"tag_name\"[[:space:]]*:[[:space:]]*\"(v[0-9]+\.[0-9]+\.[0-9]+)\" ]]; then
+      tag="${BASH_REMATCH[1]}"
+      draft=""
+      prerelease=""
     fi
-  done < <(printf '%s' "$releases_json" | tr '\n' ' ' | grep -oE '{[^}]*}')
+
+    if [[ -n "${tag:-}" && "$line" =~ \"draft\"[[:space:]]*:[[:space:]]*(true|false) ]]; then
+      draft="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ -n "${tag:-}" && "$line" =~ \"prerelease\"[[:space:]]*:[[:space:]]*(true|false) ]]; then
+      prerelease="${BASH_REMATCH[1]}"
+
+      if [[ "$draft" == "false" && "$prerelease" == "false" ]]; then
+        candidate="$(normalize_version "$tag")"
+        if [[ -z "$latest" || "$(compare_versions "$latest" "$candidate")" == "lt" ]]; then
+          latest="$candidate"
+        fi
+      fi
+
+      tag=""
+      draft=""
+      prerelease=""
+    fi
+  done < <(printf '%s\n' "$releases_json")
 
   if [[ -z "$latest" ]]; then
     error "Could not parse a stable vMAJOR.MINOR.PATCH release from ${REPO}; refusing to guess a version."

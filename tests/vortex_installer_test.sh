@@ -71,10 +71,26 @@ test_get_latest_version_uses_highest_stable_release() {
   gh_api_get() {
     cat <<'JSON'
 [
-  {"tag_name":"v1.2.3","draft":false,"prerelease":false},
-  {"tag_name":"v9.0.0-rc1","draft":false,"prerelease":true},
-  {"tag_name":"v1.4.0","draft":true,"prerelease":false},
-  {"tag_name":"v1.3.0","draft":false,"prerelease":false}
+  {
+    "tag_name": "v1.2.3",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v9.0.0-rc1",
+    "draft": false,
+    "prerelease": true
+  },
+  {
+    "tag_name": "v1.4.0",
+    "draft": true,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v1.3.0",
+    "draft": false,
+    "prerelease": false
+  }
 ]
 JSON
   }
@@ -84,7 +100,7 @@ JSON
 
 test_get_latest_version_fails_without_stable_release() {
   gh_api_get() {
-    printf '[{"tag_name":"v9.0.0-rc1","draft":false,"prerelease":true}]\n'
+    printf '[{"tag_name": "v9.0.0-rc1", "draft": false, "prerelease": true}]\n'
   }
 
   if (get_latest_version >/dev/null 2>/dev/null); then
@@ -93,11 +109,11 @@ test_get_latest_version_fails_without_stable_release() {
 }
 
 test_validate_metrics_port() {
-  if validate_metrics_port "abc" >/dev/null 2>&1; then
+  if (validate_metrics_port "abc" >/dev/null 2>&1); then
     fail "validate_metrics_port should reject non-numeric values"
   fi
 
-  if validate_metrics_port "70000" >/dev/null 2>&1; then
+  if (validate_metrics_port "70000" >/dev/null 2>&1); then
     fail "validate_metrics_port should reject values above 65535"
   fi
 
