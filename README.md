@@ -90,7 +90,7 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
   - `VORTEX_RELEASE_REPO` defaults to `PipeOpsHQ/vortex`.
   - The latest version is the highest `vMAJOR.MINOR.PATCH` release in that repo.
   - Optional: set `VORTEX_VERSION=0.1.0` to pin to a specific Vortex release.
-  - For service auto-enrollment, set `VORTEX_GATEWAY_URL`, `VORTEX_BOOTSTRAP_TOKEN`, and `VORTEX_WORKSPACE_ID` (aliases: `GATEWAY_URL`, `TOKEN`, `WORKSPACE_ID`).
+  - For service auto-enrollment, set `VORTEX_GATEWAY_URL`, `VORTEX_BOOTSTRAP_TOKEN`, and `VORTEX_WORKSPACE_ID`.
 
 ## Publish Igris releases
 

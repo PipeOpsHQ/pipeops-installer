@@ -14,7 +14,7 @@
 #   INSTALL_VORTEX     - Install Vortex alongside Linux host installs (default: auto; aliases: IGRIS_INSTALL_VORTEX)
 #   VORTEX_INSTALLER_URL - Optional Vortex installer URL (default: https://get.pipeops.dev/vortex.sh)
 #   VORTEX_INSTALLER_ALLOWED_HOSTS - Comma-separated allowlist for Vortex installer host(s)
-#   VORTEX_INSTALLER_SHA256 - Optional SHA-256 checksum for the downloaded Vortex installer script.
+#   VORTEX_INSTALLER_SHA256 - SHA-256 checksum override for a custom downloaded Vortex installer script.
 #   IGRIS_RELEASE_REPO - GitHub release repo for public agent assets
 #                        (default: PipeOpsHQ/pipeops-installer)
 #   IGRIS_GITHUB_TOKEN - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
@@ -48,6 +48,8 @@ IGRIS_SERVICE_STARTED="false"
 # higher GitHub API rate limit.
 GITHUB_TOKEN_VALUE="${IGRIS_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
 VORTEX_INSTALLER_ALLOWED_HOSTS="${VORTEX_INSTALLER_ALLOWED_HOSTS:-get.pipeops.dev}"
+DEFAULT_VORTEX_INSTALLER_URL="https://get.pipeops.dev/vortex.sh"
+DEFAULT_VORTEX_INSTALLER_SHA256="e92b509ad6416f50f0be578b5040162fb739f0de69f4713850e68251cb100312"
 
 # Colors for output
 RED=$'\033[0;31m'
@@ -169,13 +171,26 @@ verify_vortex_installer_checksum() {
     local expected_sha256="${2:-${VORTEX_INSTALLER_SHA256:-}}"
 
     if [[ -z "$expected_sha256" ]]; then
-        return
+        error "No trusted Vortex installer checksum configured; refusing to execute ${installer_path}."
     fi
 
     local actual_sha256
     actual_sha256="$(calculate_sha256 "$installer_path")"
     if [[ "$actual_sha256" != "$expected_sha256" ]]; then
         error "Vortex installer checksum mismatch for ${installer_path}. expected=${expected_sha256} actual=${actual_sha256}"
+    fi
+}
+
+vortex_installer_expected_sha256() {
+    local installer_url="$1"
+
+    if [[ -n "${VORTEX_INSTALLER_SHA256:-}" ]]; then
+        printf '%s' "$VORTEX_INSTALLER_SHA256"
+        return
+    fi
+
+    if [[ "$installer_url" == "$DEFAULT_VORTEX_INSTALLER_URL" ]]; then
+        printf '%s' "$DEFAULT_VORTEX_INSTALLER_SHA256"
     fi
 }
 
@@ -364,7 +379,7 @@ vortex_bundle_required() {
 }
 
 vortex_installer_url() {
-    printf '%s' "${VORTEX_INSTALLER_URL:-https://get.pipeops.dev/vortex.sh}"
+    printf '%s' "${VORTEX_INSTALLER_URL:-$DEFAULT_VORTEX_INSTALLER_URL}"
 }
 
 should_install_bundled_vortex() {
@@ -418,15 +433,13 @@ build_vortex_env_lines() {
     [[ -n "${VORTEX_VERSION:-}" ]] && emit_vortex_env_assignment "VORTEX_VERSION" "$VORTEX_VERSION"
     [[ -n "${VORTEX_RELEASE_REPO:-}" ]] && emit_vortex_env_assignment "VORTEX_RELEASE_REPO" "$VORTEX_RELEASE_REPO"
     [[ -n "${VORTEX_GITHUB_TOKEN:-}" ]] && emit_vortex_env_assignment "VORTEX_GITHUB_TOKEN" "$VORTEX_GITHUB_TOKEN"
-    [[ -n "${GITHUB_TOKEN:-}" ]] && emit_vortex_env_assignment "GITHUB_TOKEN" "$GITHUB_TOKEN"
-    [[ -n "${GH_TOKEN:-}" ]] && emit_vortex_env_assignment "GH_TOKEN" "$GH_TOKEN"
     return 0
 }
 
 run_vortex_installer() {
     local installer_url="$1"
     shift
-    local temp_dir temp_script env_file
+    local temp_dir temp_script env_file expected_sha256
     local install_status=0
     local -a script_cmd
 
@@ -434,13 +447,17 @@ run_vortex_installer() {
         return 1
     fi
 
-    temp_dir="$(mktemp -d)"
+    temp_dir="$(mktemp -d)" || {
+        warn "Failed to create temporary directory for bundled network agent installer."
+        return 1
+    }
     temp_script="${temp_dir}/vortex.sh"
     env_file="${temp_dir}/vortex.env"
+    expected_sha256="$(vortex_installer_expected_sha256 "$installer_url")"
 
-    if ! download_installer_script "$installer_url" "$temp_script" "${VORTEX_INSTALLER_SHA256:-}"; then
+    if ! download_installer_script "$installer_url" "$temp_script" "$expected_sha256"; then
         rm -rf "$temp_dir"
-        warn "Failed to download Vortex installer from ${installer_url}"
+        warn "Failed to download bundled network agent installer from ${installer_url}"
         return 1
     fi
     chmod 700 "$temp_script"
@@ -449,11 +466,12 @@ run_vortex_installer() {
     if [[ "$(id -u)" -eq 0 ]]; then
         script_cmd=(bash -c)
     else
-        ensure_sudo_available "install bundled Vortex Network Agent"
+        ensure_sudo_available "install bundled network agent"
         script_cmd=(sudo bash -c)
     fi
 
-    "${script_cmd[@]}" 'set -a; . "$1"; set +a; exec bash "$2"' "$env_file" "$temp_script"
+    # shellcheck disable=SC2016 # $1/$2 are intentionally expanded by the child bash.
+    "${script_cmd[@]}" 'set -e; set -a; . "$1"; set +a; exec bash "$2"' "$env_file" "$temp_script"
     install_status=$?
 
     rm -rf "$temp_dir"
@@ -473,19 +491,21 @@ install_bundled_vortex_if_needed() {
         [[ -n "$env_line" ]] && env_args+=("$env_line")
     done < <(build_vortex_env_lines)
 
-    refuse_insecure_artifact_token "$installer_url" "$(resolve_agent_token)"
-    info "Installing bundled Vortex Network Agent..."
+    local agent_token
+    agent_token="$(resolve_agent_token)"
+    refuse_insecure_artifact_token "$installer_url" "$agent_token"
+    info "Installing bundled network agent..."
     if run_vortex_installer "$installer_url" "${env_args[@]}"; then
-        success "Bundled Vortex Network Agent installed."
+        success "Bundled network agent installed."
         return 0
     fi
 
     if vortex_bundle_required; then
-        error "Bundled Vortex Network Agent installation failed."
+        error "Bundled network agent installation failed."
     fi
 
-    warn "Bundled Vortex Network Agent installation failed; Igris remains installed."
-    warn "Rerun with IGRIS_REQUIRE_VORTEX=true to make this failure block the host install."
+    warn "Bundled network agent installation failed; the security agent remains installed."
+    warn "Enable required bundled network-agent installation to make this failure block the host install."
 }
 
 # ─── Version comparison ──────────────────────────────────────────────────────

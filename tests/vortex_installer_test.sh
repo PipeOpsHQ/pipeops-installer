@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export VORTEX_INSTALLER_SKIP_MAIN=1
-# shellcheck source=../vortex.sh
+# shellcheck source=vortex.sh
 source "${REPO_ROOT}/vortex.sh"
 
 fail() {
@@ -67,10 +67,32 @@ test_render_config_file() {
   grep -q '^capture_backend = "pcap"$' "$tmp" || fail "config missing capture backend"
 }
 
+test_validate_metrics_port() {
+  if (validate_metrics_port "abc" >/dev/null 2>&1); then
+    fail "validate_metrics_port should reject non-numeric values"
+  fi
+
+  if (validate_metrics_port "70000" >/dev/null 2>&1); then
+    fail "validate_metrics_port should reject values above 65535"
+  fi
+
+  validate_metrics_port "9090" >/dev/null
+}
+
+test_validate_iface() {
+  validate_iface "eth0.10" >/dev/null
+
+  if (validate_iface $'eth0\nmalicious=true' >/dev/null 2>&1); then
+    fail "validate_iface should reject newline injection"
+  fi
+}
+
 test_normalize_version
 test_archive_candidates_include_normalized_and_legacy_names
 test_normalize_arch
 test_missing_gateway_requirements
 test_render_config_file
+test_validate_metrics_port
+test_validate_iface
 
 echo "ok"

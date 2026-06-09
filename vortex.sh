@@ -8,7 +8,7 @@
 #   VORTEX_INSTALL_DIR     - Binary install directory (default: /usr/local/bin)
 #   VORTEX_RELEASE_REPO    - GitHub release repo (default: PipeOpsHQ/vortex)
 #   VORTEX_GITHUB_TOKEN    - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
-#   VORTEX_GATEWAY_URL     - Halo Gateway URL (alias: GATEWAY_URL)
+#   VORTEX_GATEWAY_URL     - Gateway URL (alias: GATEWAY_URL)
 #   VORTEX_BOOTSTRAP_TOKEN - Agent bootstrap JWT/API key/service key (aliases: VORTEX_TOKEN, TOKEN, IGRIS_AGENT_TOKEN)
 #   VORTEX_WORKSPACE_ID    - Workspace ID/UUID (alias: WORKSPACE_ID)
 #   VORTEX_TENANT_ID       - Optional tenant ID/UUID (alias: TENANT_ID)
@@ -189,7 +189,9 @@ compare_versions() {
   rhs="${rhs#v}"; rhs="${rhs%%-*}"; rhs="${rhs%%+*}"
 
   local IFS='.'
-  local a=($lhs) b=($rhs)
+  local a b
+  read -r -a a <<< "$lhs"
+  read -r -a b <<< "$rhs"
   local i max=${#a[@]}
   (( ${#b[@]} > max )) && max=${#b[@]}
   for (( i = 0; i < max; i++ )); do
@@ -336,6 +338,26 @@ validate_tar_entries() {
   done < <(tar -tzf "$archive")
 }
 
+validate_metrics_port() {
+  local metrics_port="${1:-}"
+
+  if ! [[ "$metrics_port" =~ ^[0-9]+$ ]]; then
+    error "VORTEX_METRICS_PORT must be a non-negative integer."
+  fi
+
+  if (( metrics_port > 65535 )); then
+    error "VORTEX_METRICS_PORT must be between 0 and 65535."
+  fi
+}
+
+validate_iface() {
+  local iface="${1:-}"
+
+  if ! [[ "$iface" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+    error "VORTEX_IFACE contains unsupported characters."
+  fi
+}
+
 install_release_payload() {
   local tmp_dir="$1"
   local install_dir="$2"
@@ -400,7 +422,7 @@ download_and_install() {
   success "Checksum verified"
 
   validate_tar_entries "${tmp_dir}/${selected}"
-  tar -xzf "${tmp_dir}/${selected}" -C "$tmp_dir"
+  tar --no-same-owner --no-same-permissions -xzf "${tmp_dir}/${selected}" -C "$tmp_dir"
   install_release_payload "$tmp_dir" "$INSTALL_DIR"
 
   success "Vortex installed successfully."
@@ -600,9 +622,11 @@ install_service_if_requested() {
   tenant_id="$(resolve_tenant_id)"
   org_id="$(resolve_org_id)"
   iface="$(resolve_iface)"
+  validate_iface "$iface"
   capture_backend="${VORTEX_CAPTURE_BACKEND:-auto}"
   ips_mode="${VORTEX_IPS_MODE:-false}"
   metrics_port="${VORTEX_METRICS_PORT:-9090}"
+  validate_metrics_port "$metrics_port"
 
   case "$capture_backend" in
     auto|ebpf|pcap) ;;
@@ -627,7 +651,7 @@ print_success_message() {
   echo "  sudo ${INSTALL_DIR}/${BINARY_NAME} --iface $(resolve_iface)"
   echo
   echo "Auto-enrollment:"
-  echo "  VORTEX_GATEWAY_URL=https://halo.example.com \\"
+  echo "  VORTEX_GATEWAY_URL=https://gateway.example.com \\"
   echo "  VORTEX_BOOTSTRAP_TOKEN=<agent-install-service-key> \\"
   echo "  VORTEX_WORKSPACE_ID=<workspace-uuid> \\"
   echo "  curl -fsSL https://get.pipeops.dev/vortex.sh | bash"

@@ -15,7 +15,7 @@ uname() {
 }
 
 export IGRIS_INSTALLER_SKIP_MAIN=1
-# shellcheck source=../igris.sh
+# shellcheck source=igris.sh
 source "${REPO_ROOT}/igris.sh"
 
 fail() {
@@ -43,6 +43,7 @@ assert_should_install() {
   local label="$1"
   shift
 
+  # shellcheck disable=SC2016 # $1 is intentionally expanded by the child bash.
   if ! env "$@" bash -c 'source "$1"; should_install_bundled_vortex' bash "${REPO_ROOT}/igris.sh"; then
     fail "${label}: expected Vortex bundle install"
   fi
@@ -52,6 +53,7 @@ assert_should_not_install() {
   local label="$1"
   shift
 
+  # shellcheck disable=SC2016 # $1 is intentionally expanded by the child bash.
   if env "$@" bash -c 'source "$1"; should_install_bundled_vortex' bash "${REPO_ROOT}/igris.sh"; then
     fail "${label}: expected Vortex bundle skip"
   fi
@@ -115,6 +117,8 @@ test_builds_vortex_env_from_igris_context() {
     VORTEX_CAPTURE_BACKEND=pcap \
     VORTEX_IPS_MODE=true \
     VORTEX_METRICS_PORT=19090 \
+    GITHUB_TOKEN=ambient-github-token \
+    GH_TOKEN=ambient-gh-token \
     build_vortex_env_lines
   )"
 
@@ -128,6 +132,9 @@ test_builds_vortex_env_from_igris_context() {
   assert_contains_line "$lines" "VORTEX_IPS_MODE=true" "ips mode env"
   assert_contains_line "$lines" "VORTEX_METRICS_PORT=19090" "metrics env"
   assert_contains_line "$lines" "VORTEX_INSTALL_SERVICE=true" "service env"
+  if grep -Eq '^(GITHUB_TOKEN|GH_TOKEN)=' <<< "$lines"; then
+    fail "ambient GitHub tokens should not be forwarded to bundled installer"
+  fi
 }
 
 test_vortex_installer_host_allowlist() {
@@ -190,11 +197,19 @@ test_vortex_installer_checksum_validation() {
   trap 'rm -rf "$tmp"' RETURN
 
   printf 'trusted contents' > "$tmp/vortex.sh"
+  if (VORTEX_INSTALLER_SHA256="" verify_vortex_installer_checksum "$tmp/vortex.sh" "" >/dev/null 2>&1); then
+    fail "missing checksum should fail closed"
+  fi
+
   VORTEX_INSTALLER_SHA256="$(calculate_sha256 "$tmp/vortex.sh")" \
     verify_vortex_installer_checksum "$tmp/vortex.sh" || fail "matching checksum should pass"
 
   if (VORTEX_INSTALLER_SHA256="deadbeef" verify_vortex_installer_checksum "$tmp/vortex.sh" >/dev/null 2>&1); then
     fail "mismatched checksum should fail"
+  fi
+
+  if [[ -z "$(vortex_installer_expected_sha256 "https://get.pipeops.dev/vortex.sh")" ]]; then
+    fail "default Vortex installer URL should have a pinned checksum"
   fi
 }
 
