@@ -712,7 +712,11 @@ reset_agent_state_if_requested() {
     fi
 
     if [[ -e "$state_file" ]]; then
-        rm -f "$state_file"
+        if rm -f "$state_file" 2>/dev/null; then
+            return 0
+        fi
+        ensure_sudo_available "reset persisted Igris registration state"
+        sudo rm -f "$state_file"
         return 0
     fi
 

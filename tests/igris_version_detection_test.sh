@@ -78,4 +78,43 @@ if [[ ! -f "$state_file" ]]; then
   fail "reset_agent_state_if_requested should keep state file when reset defaults on but is explicitly disabled"
 fi
 
+sudo_marker="$tmp_dir/sudo-reset-called"
+(
+  # shellcheck disable=SC2329  # test shims are invoked indirectly by sourced installer code
+  id() {
+    if [[ "${1:-}" == "-u" ]]; then
+      printf '501\n'
+      return 0
+    fi
+    command id "$@"
+  }
+
+  # shellcheck disable=SC2329  # test shim is invoked indirectly by sourced installer code
+  rm() {
+    if [[ "${1:-}" == "-f" && "${2:-}" == "$state_file" ]]; then
+      return 1
+    fi
+    command rm "$@"
+  }
+
+  # shellcheck disable=SC2329  # test shim is invoked indirectly by sourced installer code
+  sudo() {
+    if [[ "${1:-}" == "-v" ]]; then
+      return 0
+    fi
+    if [[ "${1:-}" == "rm" && "${2:-}" == "-f" && "${3:-}" == "$state_file" ]]; then
+      printf 'called\n' > "$sudo_marker"
+      command rm -f "$3"
+      return 0
+    fi
+    return 1
+  }
+
+  printf '{"uuid":"root-owned"}\n' > "$state_file"
+  IGRIS_STATE_FILE="$state_file" reset_agent_state_if_requested true
+)
+if [[ -f "$state_file" || ! -f "$sudo_marker" ]]; then
+  fail "reset_agent_state_if_requested should fall back to sudo when direct state removal fails"
+fi
+
 echo "ok: igris version detection and optional state reset are bounded"
