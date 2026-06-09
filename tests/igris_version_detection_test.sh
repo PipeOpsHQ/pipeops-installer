@@ -67,9 +67,9 @@ if [[ ! -f "$state_file" ]]; then
 fi
 
 printf '{"uuid":"stale-bootstrap"}\n' > "$state_file"
-IGRIS_STATE_FILE="$state_file" reset_agent_state_if_requested true
-if [[ -f "$state_file" ]]; then
-  fail "reset_agent_state_if_requested should remove stale state file when reset defaults on"
+IGRIS_STATE_FILE="$state_file" IGRIS_GATEWAY_URL="https://gateway.example.com" reset_agent_state_if_requested false
+if [[ ! -f "$state_file" ]]; then
+  fail "reset_agent_state_if_requested should preserve state file by default on bootstrap reruns"
 fi
 
 printf '{"uuid":"explicit-keep"}\n' > "$state_file"
@@ -111,7 +111,7 @@ sudo_marker="$tmp_dir/sudo-reset-called"
   }
 
   printf '{"uuid":"root-owned"}\n' > "$state_file"
-  IGRIS_STATE_FILE="$state_file" reset_agent_state_if_requested true
+  IGRIS_STATE_FILE="$state_file" IGRIS_RESET_STATE=1 reset_agent_state_if_requested
 )
 if [[ -f "$state_file" || ! -f "$sudo_marker" ]]; then
   fail "reset_agent_state_if_requested should fall back to sudo when direct state removal fails"

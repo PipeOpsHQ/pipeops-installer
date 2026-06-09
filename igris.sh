@@ -15,8 +15,8 @@
 #                        (default: PipeOpsHQ/pipeops-installer)
 #   IGRIS_GITHUB_TOKEN - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
 #                        for private release repo overrides or rate limits.
-#   IGRIS_RESET_STATE  - Set to 1/true to remove persisted registration state
-#                        before creating a service from bootstrap env vars.
+#   IGRIS_RESET_STATE  - Set to 1/true with a fresh install key to remove
+#                        persisted registration state and re-enroll this host.
 #
 
 set -euo pipefail
@@ -699,12 +699,19 @@ reset_agent_state_if_requested() {
     fi
 
     if [[ "$should_reset" != "true" ]]; then
+        local state_file="${IGRIS_STATE_FILE:-/var/lib/igris/state.json}"
+        if [[ -e "$state_file" ]] && has_bootstrap_env; then
+            warn "Existing Igris registration state found; preserving current agent identity."
+            warn "Set IGRIS_RESET_STATE=1 with a fresh install key to re-enroll this host into another account."
+        fi
         return 0
     fi
 
     local state_file="${IGRIS_STATE_FILE:-/var/lib/igris/state.json}"
     local state_dir
     state_dir="$(dirname "$state_file")"
+
+    warn "Resetting persisted Igris registration state. The next registration creates a new agent identity and requires a fresh install key."
 
     if [[ "$(id -u)" -eq 0 ]]; then
         rm -f "$state_file"
@@ -1550,7 +1557,7 @@ main() {
             create_daemonized_runtime
         fi
     elif has_bootstrap_env; then
-        reset_agent_state_if_requested true
+        reset_agent_state_if_requested false
         create_systemd_service true
         create_openrc_service true
         create_launchd_service true
