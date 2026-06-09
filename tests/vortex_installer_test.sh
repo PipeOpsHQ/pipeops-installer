@@ -71,9 +71,10 @@ test_get_latest_version_uses_highest_stable_release() {
   gh_api_get() {
     cat <<'JSON'
 [
-  {"tag_name":"v1.2.3"},
-  {"tag_name":"v9.0.0-rc1"},
-  {"tag_name":"v1.3.0"}
+  {"tag_name":"v1.2.3","draft":false,"prerelease":false},
+  {"tag_name":"v9.0.0-rc1","draft":false,"prerelease":true},
+  {"tag_name":"v1.4.0","draft":true,"prerelease":false},
+  {"tag_name":"v1.3.0","draft":false,"prerelease":false}
 ]
 JSON
   }
@@ -83,12 +84,24 @@ JSON
 
 test_get_latest_version_fails_without_stable_release() {
   gh_api_get() {
-    printf '[{"tag_name":"v9.0.0-rc1"}]\n'
+    printf '[{"tag_name":"v9.0.0-rc1","draft":false,"prerelease":true}]\n'
   }
 
   if (get_latest_version >/dev/null 2>/dev/null); then
     fail "get_latest_version should fail closed when no stable semver tag exists"
   fi
+}
+
+test_validate_metrics_port() {
+  if validate_metrics_port "abc" >/dev/null 2>&1; then
+    fail "validate_metrics_port should reject non-numeric values"
+  fi
+
+  if validate_metrics_port "70000" >/dev/null 2>&1; then
+    fail "validate_metrics_port should reject values above 65535"
+  fi
+
+  validate_metrics_port "9090" >/dev/null
 }
 
 test_validate_tar_entries_rejects_symlink() {
@@ -207,6 +220,30 @@ test_validate_tar_entries_rejects_traversal_paths() {
   unset -f tar
 }
 
+test_has_vortex_enrollment_env() {
+  unset VORTEX_GATEWAY_URL VORTEX_BOOTSTRAP_TOKEN VORTEX_TOKEN VORTEX_WORKSPACE_ID VORTEX_TENANT_ID VORTEX_ORG_ID
+  if has_vortex_enrollment_env; then
+    fail "has_vortex_enrollment_env should not trigger when only TOKEN/GATEWAY_URL aliases are set"
+  fi
+
+  TOKEN="abc"
+  export TOKEN
+  if has_vortex_enrollment_env; then
+    fail "has_vortex_enrollment_env should ignore generic alias env vars"
+  fi
+  TOKEN=""
+  export TOKEN
+
+  VORTEX_BOOTSTRAP_TOKEN="abc"
+  export VORTEX_BOOTSTRAP_TOKEN
+  if ! has_vortex_enrollment_env; then
+    fail "has_vortex_enrollment_env should trigger when VORTEX_* vars are set"
+  fi
+
+  unset TOKEN
+  unset VORTEX_BOOTSTRAP_TOKEN
+}
+
 test_normalize_version
 test_archive_candidates_include_normalized_and_legacy_names
 test_normalize_arch
@@ -217,5 +254,7 @@ test_get_latest_version_fails_without_stable_release
 test_validate_tar_entries_rejects_symlink
 test_validate_tar_entries_rejects_absolute_paths
 test_validate_tar_entries_rejects_traversal_paths
+test_validate_metrics_port
+test_has_vortex_enrollment_env
 
 echo "ok"

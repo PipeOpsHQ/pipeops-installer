@@ -8,11 +8,11 @@
 #   VORTEX_INSTALL_DIR     - Binary install directory (default: /usr/local/bin)
 #   VORTEX_RELEASE_REPO    - GitHub release repo (default: PipeOpsHQ/vortex)
 #   VORTEX_GITHUB_TOKEN    - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
-#   VORTEX_GATEWAY_URL     - Gateway URL (alias: GATEWAY_URL)
-#   VORTEX_BOOTSTRAP_TOKEN - Agent bootstrap JWT/API key/service key (aliases: VORTEX_TOKEN, TOKEN, IGRIS_AGENT_TOKEN)
-#   VORTEX_WORKSPACE_ID    - Workspace ID/UUID (alias: WORKSPACE_ID)
-#   VORTEX_TENANT_ID       - Optional tenant ID/UUID (alias: TENANT_ID)
-#   VORTEX_ORG_ID          - Optional organization ID/UUID (alias: ORG_ID)
+#   VORTEX_GATEWAY_URL     - Gateway URL
+#   VORTEX_BOOTSTRAP_TOKEN - Agent bootstrap JWT/API key/service key (alias: VORTEX_TOKEN)
+#   VORTEX_WORKSPACE_ID    - Workspace ID/UUID
+#   VORTEX_TENANT_ID       - Optional tenant ID/UUID
+#   VORTEX_ORG_ID          - Optional organization ID/UUID
 #   VORTEX_IFACE           - Network interface to monitor (default: default route device or eth0)
 #   VORTEX_CAPTURE_BACKEND - auto, ebpf, or pcap (default: auto)
 #   VORTEX_IPS_MODE        - true/false (default: false)
@@ -30,6 +30,10 @@ fi
 TMP_PATHS=()
 cleanup_tmp_paths() {
   local path
+  if (( ${#TMP_PATHS[@]} == 0 )); then
+    return 0
+  fi
+
   for path in "${TMP_PATHS[@]:-}"; do
     rm -rf -- "$path"
   done
@@ -117,23 +121,23 @@ get_first_env() {
 }
 
 resolve_gateway_url() {
-  get_first_env VORTEX_GATEWAY_URL GATEWAY_URL || true
+  get_first_env VORTEX_GATEWAY_URL || true
 }
 
 resolve_bootstrap_token() {
-  get_first_env VORTEX_BOOTSTRAP_TOKEN VORTEX_TOKEN TOKEN IGRIS_AGENT_TOKEN IGRIS_TOKEN || true
+  get_first_env VORTEX_BOOTSTRAP_TOKEN VORTEX_TOKEN TOKEN || true
 }
 
 resolve_workspace_id() {
-  get_first_env VORTEX_WORKSPACE_ID WORKSPACE_ID IGRIS_WORKSPACE_ID || true
+  get_first_env VORTEX_WORKSPACE_ID WORKSPACE_ID || true
 }
 
 resolve_tenant_id() {
-  get_first_env VORTEX_TENANT_ID TENANT_ID IGRIS_TENANT_ID || true
+  get_first_env VORTEX_TENANT_ID TENANT_ID || true
 }
 
 resolve_org_id() {
-  get_first_env VORTEX_ORG_ID ORG_ID IGRIS_ORG_ID || true
+  get_first_env VORTEX_ORG_ID ORG_ID || true
 }
 
 truthy() {
@@ -176,8 +180,8 @@ resolve_iface() {
   printf '%s' "${iface:-eth0}"
 }
 
-has_gateway_env() {
-  [[ -n "$(resolve_gateway_url)" || -n "$(resolve_bootstrap_token)" || -n "$(resolve_workspace_id)" || -n "$(resolve_tenant_id)" || -n "$(resolve_org_id)" ]]
+has_vortex_enrollment_env() {
+  [[ -n "${VORTEX_GATEWAY_URL:-}" || -n "${VORTEX_BOOTSTRAP_TOKEN:-}" || -n "${VORTEX_TOKEN:-}" || -n "${VORTEX_WORKSPACE_ID:-}" || -n "${VORTEX_TENANT_ID:-}" || -n "${VORTEX_ORG_ID:-}" ]]
 }
 
 missing_gateway_requirements() {
@@ -317,18 +321,41 @@ validate_https_url() {
   esac
 }
 
+is_allowed_download_host() {
+  local url="$1"
+  local host
+
+  host="${url#https://}"
+  host="${host%%/*}"
+
+  case "$host" in
+    github.com | api.github.com | uploads.github.com | *.github.com | *.githubusercontent.com)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 curl_download_with_token() {
-  local url="$1" out="$2" accept="$3"
+  local url="$1" out="$2" accept="$3" token="${4:-}"
   local headers tmp_body status redirect_url
+  local headers_args=()
 
   headers="$(make_tmp_file)"
   tmp_body="$(make_tmp_file)"
 
+  if [[ -n "$token" ]]; then
+    headers_args=(-H "Authorization: Bearer ${token}" -H "Accept: ${accept}")
+  else
+    headers_args=(-H "Accept: ${accept}")
+  fi
+
   status="$(curl -fsS --proto '=https' --tlsv1.2 \
     -w '%{http_code}' \
     -D "$headers" \
-    -H "Authorization: Bearer ${GITHUB_TOKEN_VALUE}" \
-    -H "Accept: ${accept}" \
+    "${headers_args[@]}" \
     -o "$tmp_body" \
     "$url")" || return 1
 
@@ -341,7 +368,10 @@ curl_download_with_token() {
     redirect_url="$(awk 'BEGIN{IGNORECASE=1} /^location:/ {sub(/\r$/, "", $0); sub(/^[Ll]ocation:[[:space:]]*/, "", $0); print; exit}' "$headers")"
     [[ -n "$redirect_url" ]] || return 1
     validate_https_url "$redirect_url"
-    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$out" "$redirect_url"
+    if ! is_allowed_download_host "$redirect_url"; then
+      error "Refusing download redirect from unexpected host: ${redirect_url}"
+    fi
+    curl -fsS --proto '=https' --proto-redir '=https' --tlsv1.2 -H "Accept: ${accept}" -o "$out" "$redirect_url"
     return
   fi
 
@@ -352,12 +382,15 @@ gh_download_file() {
   local url="$1" out="$2"
 
   validate_https_url "$url"
+  if ! is_allowed_download_host "$url"; then
+    error "Refusing download from unexpected host: ${url}"
+  fi
 
   if command -v curl >/dev/null 2>&1; then
     if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
-      curl_download_with_token "$url" "$out" "application/octet-stream"
+      curl_download_with_token "$url" "$out" "application/octet-stream" "${GITHUB_TOKEN_VALUE}"
     else
-      curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$out" "$url"
+      curl_download_with_token "$url" "$out" "application/octet-stream"
     fi
   elif command -v wget >/dev/null 2>&1; then
     if [[ -n "$GITHUB_TOKEN_VALUE" ]]; then
@@ -375,18 +408,24 @@ get_latest_version() {
   local releases_json
   local tag
   local candidate
+  local release_obj
 
   releases_json="$(gh_api_get "https://api.github.com/repos/${REPO}/releases?per_page=100")" \
     || error "Could not resolve the latest Vortex version from ${REPO}."
 
-  while IFS= read -r tag; do
+  while IFS= read -r release_obj; do
+    [[ -z "$release_obj" ]] && continue
+    [[ "$release_obj" == *"\"draft\":false"* ]] || continue
+    [[ "$release_obj" == *"\"prerelease\":false"* ]] || continue
+
+    tag="$(printf '%s' "$release_obj" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)".*/\1/' || true)"
+    [[ -n "$tag" ]] || continue
+
     candidate="$(normalize_version "$tag")"
     if [[ -z "$latest" || "$(compare_versions "$latest" "$candidate")" == "lt" ]]; then
       latest="$candidate"
     fi
-  done < <(printf '%s\n' "$releases_json" \
-    | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' \
-    | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)".*/\1/' || true)
+  done < <(printf '%s' "$releases_json" | tr '\n' ' ' | grep -oE '{[^}]*}')
 
   if [[ -z "$latest" ]]; then
     error "Could not parse a stable vMAJOR.MINOR.PATCH release from ${REPO}; refusing to guess a version."
@@ -442,6 +481,18 @@ validate_tar_entries() {
         ;;
     esac
   done < <(LC_ALL=C tar -tvf "$archive")
+}
+
+validate_metrics_port() {
+  local metrics_port="${1}"
+
+  if ! [[ "$metrics_port" =~ ^[0-9]+$ ]]; then
+    error "VORTEX_METRICS_PORT must be a non-negative integer."
+  fi
+
+  if (( metrics_port > 65535 )); then
+    error "VORTEX_METRICS_PORT must be between 0 and 65535."
+  fi
 }
 
 install_release_payload() {
@@ -737,13 +788,13 @@ should_install_service() {
     return 0
   fi
 
-  if has_gateway_env; then
+  if has_vortex_enrollment_env; then
     return 0
   fi
 
-  if [[ -t 0 ]]; then
+  if [[ -r /dev/tty ]]; then
     local reply
-    read -r -p "Would you like to install Vortex as a systemd service? [y/N] " reply
+    read -r -p "Would you like to install Vortex as a systemd service? [y/N] " reply < /dev/tty
     [[ "$reply" =~ ^[Yy]$ ]]
     return
   fi
@@ -765,7 +816,7 @@ install_service_if_requested() {
 
   should_install_service || return
 
-  if has_gateway_env; then
+  if has_vortex_enrollment_env; then
     missing="$(missing_gateway_requirements)"
     if [[ -n "$missing" ]]; then
       error "Cannot configure Vortex enrollment; missing required env vars: ${missing}"
@@ -781,6 +832,7 @@ install_service_if_requested() {
   capture_backend="${VORTEX_CAPTURE_BACKEND:-auto}"
   ips_mode="${VORTEX_IPS_MODE:-false}"
   metrics_port="${VORTEX_METRICS_PORT:-9090}"
+  validate_metrics_port "$metrics_port"
 
   case "$capture_backend" in
     auto|ebpf|pcap) ;;
