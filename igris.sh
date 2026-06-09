@@ -688,7 +688,17 @@ detect_installed_version() {
 }
 
 reset_agent_state_if_requested() {
-    if ! truthy_env "${IGRIS_RESET_STATE:-}"; then
+    local default_reset="${1:-false}"
+    local should_reset="$default_reset"
+    if [[ -n "${IGRIS_RESET_STATE+x}" ]]; then
+        if truthy_env "${IGRIS_RESET_STATE:-}"; then
+            should_reset="true"
+        else
+            should_reset="false"
+        fi
+    fi
+
+    if [[ "$should_reset" != "true" ]]; then
         return 0
     fi
 
@@ -1536,7 +1546,7 @@ main() {
             create_daemonized_runtime
         fi
     elif has_bootstrap_env; then
-        reset_agent_state_if_requested
+        reset_agent_state_if_requested true
         create_systemd_service true
         create_openrc_service true
         create_launchd_service true

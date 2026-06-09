@@ -66,4 +66,16 @@ if [[ ! -f "$state_file" ]]; then
   fail "reset_agent_state_if_requested should keep state file when reset is disabled"
 fi
 
+printf '{"uuid":"stale-bootstrap"}\n' > "$state_file"
+IGRIS_STATE_FILE="$state_file" reset_agent_state_if_requested true
+if [[ -f "$state_file" ]]; then
+  fail "reset_agent_state_if_requested should remove stale state file when reset defaults on"
+fi
+
+printf '{"uuid":"explicit-keep"}\n' > "$state_file"
+IGRIS_STATE_FILE="$state_file" IGRIS_RESET_STATE=0 reset_agent_state_if_requested true
+if [[ ! -f "$state_file" ]]; then
+  fail "reset_agent_state_if_requested should keep state file when reset defaults on but is explicitly disabled"
+fi
+
 echo "ok: igris version detection and optional state reset are bounded"
