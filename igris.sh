@@ -19,8 +19,8 @@
 #                        (default: PipeOpsHQ/pipeops-installer)
 #   IGRIS_GITHUB_TOKEN - Optional GitHub token (aliases: GITHUB_TOKEN, GH_TOKEN)
 #                        for private release repo overrides or rate limits.
-#   IGRIS_RESET_STATE  - Set to 1/true to remove persisted registration state
-#                        before creating a service from bootstrap env vars.
+#   IGRIS_RESET_STATE  - Set to 1/true with a fresh install key to remove
+#                        persisted registration state and re-enroll this host.
 #
 
 set -euo pipefail
@@ -1012,7 +1012,22 @@ detect_installed_version() {
 }
 
 reset_agent_state_if_requested() {
-    if ! truthy_env "${IGRIS_RESET_STATE:-}"; then
+    local default_reset="${1:-false}"
+    local should_reset="$default_reset"
+    if [[ -n "${IGRIS_RESET_STATE+x}" ]]; then
+        if truthy_env "${IGRIS_RESET_STATE:-}"; then
+            should_reset="true"
+        else
+            should_reset="false"
+        fi
+    fi
+
+    if [[ "$should_reset" != "true" ]]; then
+        local state_file="${IGRIS_STATE_FILE:-/var/lib/igris/state.json}"
+        if [[ -e "$state_file" ]] && has_bootstrap_env; then
+            warn "Existing Igris registration state found; preserving current agent identity."
+            warn "Set IGRIS_RESET_STATE=1 with a fresh install key to re-enroll this host into another account."
+        fi
         return 0
     fi
 
@@ -1020,13 +1035,19 @@ reset_agent_state_if_requested() {
     local state_dir
     state_dir="$(dirname "$state_file")"
 
+    warn "Resetting persisted Igris registration state. The next registration creates a new agent identity and requires a fresh install key."
+
     if [[ "$(id -u)" -eq 0 ]]; then
         rm -f "$state_file"
         return 0
     fi
 
     if [[ -e "$state_file" ]]; then
-        rm -f "$state_file"
+        if rm -f "$state_file" 2>/dev/null; then
+            return 0
+        fi
+        ensure_sudo_available "reset persisted Igris registration state"
+        sudo rm -f "$state_file"
         return 0
     fi
 
@@ -1873,7 +1894,7 @@ main() {
             create_daemonized_runtime
         fi
     elif has_bootstrap_env; then
-        reset_agent_state_if_requested
+        reset_agent_state_if_requested false
         create_systemd_service true
         create_openrc_service true
         create_launchd_service true
