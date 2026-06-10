@@ -13,7 +13,7 @@ fail() {
 mkdir -p "$tmp_dir/hung-bin" "$tmp_dir/fast-bin"
 
 export IGRIS_INSTALLER_SKIP_MAIN=1
-# shellcheck source=../igris.sh
+# shellcheck source=igris.sh
 source "$repo_root/igris.sh"
 
 cat > "$tmp_dir/hung-bin/igris" <<'SCRIPT'
@@ -89,7 +89,7 @@ sudo_marker="$tmp_dir/sudo-reset-called"
     command id "$@"
   }
 
-  # shellcheck disable=SC2329  # test shim is invoked indirectly by sourced installer code
+  # shellcheck disable=SC2032,SC2329  # test shim is invoked indirectly by sourced installer code
   rm() {
     if [[ "${1:-}" == "-f" && "${2:-}" == "$state_file" ]]; then
       return 1
@@ -115,6 +115,38 @@ sudo_marker="$tmp_dir/sudo-reset-called"
 )
 if [[ -f "$state_file" || ! -f "$sudo_marker" ]]; then
   fail "reset_agent_state_if_requested should fall back to sudo when direct state removal fails"
+fi
+
+state_dir_only="$tmp_dir/root-owned-dir"
+state_file_in_dir="$state_dir_only/state.json"
+sudo_marker_dir="$tmp_dir/sudo-reset-dir-called"
+mkdir -p "$state_dir_only"
+(
+  # shellcheck disable=SC2329  # test shims are invoked indirectly by sourced installer code
+  id() {
+    if [[ "${1:-}" == "-u" ]]; then
+      printf '501\n'
+      return 0
+    fi
+    command id "$@"
+  }
+
+  # shellcheck disable=SC2329  # test shim is invoked indirectly by sourced installer code
+  sudo() {
+    if [[ "${1:-}" == "-v" ]]; then
+      return 0
+    fi
+    if [[ "${1:-}" == "rm" && "${2:-}" == "-f" && "${3:-}" == "$state_file_in_dir" ]]; then
+      printf 'called\n' > "$sudo_marker_dir"
+      return 0
+    fi
+    return 1
+  }
+
+  IGRIS_STATE_FILE="$state_file_in_dir" IGRIS_RESET_STATE=1 reset_agent_state_if_requested
+)
+if [[ ! -f "$sudo_marker_dir" ]]; then
+  fail "reset_agent_state_if_requested should use sudo when state directory exists but state file is not visible"
 fi
 
 echo "ok: igris version detection and optional state reset are bounded"

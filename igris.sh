@@ -1032,9 +1032,6 @@ reset_agent_state_if_requested() {
     fi
 
     local state_file="${IGRIS_STATE_FILE:-/var/lib/igris/state.json}"
-    local state_dir
-    state_dir="$(dirname "$state_file")"
-
     warn "Resetting persisted Igris registration state. The next registration creates a new agent identity and requires a fresh install key."
 
     if [[ "$(id -u)" -eq 0 ]]; then
@@ -1048,10 +1045,6 @@ reset_agent_state_if_requested() {
         fi
         ensure_sudo_available "reset persisted Igris registration state"
         sudo rm -f "$state_file"
-        return 0
-    fi
-
-    if [[ -d "$state_dir" ]]; then
         return 0
     fi
 
