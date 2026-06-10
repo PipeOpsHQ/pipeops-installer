@@ -3,6 +3,7 @@
 This repo serves install scripts and manifests under your custom domain so users can run:
 
 - **Igris Agent**: `curl -fsSL https://get.pipeops.dev/igris.sh | bash`
+- **Vortex Network Agent**: `curl -fsSL https://get.pipeops.dev/vortex.sh | bash`
 - CLI: `curl -fsSL https://get.pipeops.dev/cli.sh | bash`
 - K8s agent: `curl -fsSL https://get.pipeops.dev/k8-agent.sh | bash`
 - Optional direct manifest: `kubectl apply -f https://get.pipeops.dev/k8-agent.yaml`
@@ -12,6 +13,7 @@ Adjust variables in the scripts to match your release assets and binary naming.
 ## Files
 
 - `igris.sh` — Installs the Igris Security Agent from public `PipeOpsHQ/pipeops-installer` GitHub Releases (auto-detects OS/arch, optional service setup).
+- `vortex.sh` — Installs the Vortex Network Agent from public `PipeOpsHQ/vortex` GitHub Releases (Linux amd64/arm64, checksum verification, optional systemd service setup).
 - `cli.sh` — Installs the PipeOps CLI from GitHub Releases (auto-detects OS/arch).
 - `k8-install.sh` — Delegates to the upstream cluster/agent installer (`scripts/install.sh`).
 - `agent.sh` — Alias wrapper to `k8-install.sh` for convenience.
@@ -81,6 +83,14 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
   - The latest version is the highest `vMAJOR.MINOR.PATCH` release in that repo, not GitHub's `latest` label.
   - Optional: set `IGRIS_VERSION=1.6.3` to pin to a specific Igris release.
   - Optional: set `IGRIS_BINARY_BASE_URL` only for explicit raw/self-hosted artifact installs.
+  - Linux host installs with `GATEWAY_URL`, `TOKEN`, and `WORKSPACE_ID` install Vortex automatically. Set `INSTALL_VORTEX=false` or `IGRIS_INSTALL_VORTEX=false` to opt out.
+  - Set `IGRIS_REQUIRE_VORTEX=true` when Vortex installation failure should fail the host install instead of warning and continuing.
+
+- `vortex.sh` variables:
+  - `VORTEX_RELEASE_REPO` defaults to `PipeOpsHQ/vortex`.
+  - The latest version is the highest `vMAJOR.MINOR.PATCH` release in that repo.
+  - Optional: set `VORTEX_VERSION=0.1.0` to pin to a specific Vortex release.
+  - For service auto-enrollment, set `VORTEX_GATEWAY_URL`, `VORTEX_BOOTSTRAP_TOKEN`, and `VORTEX_WORKSPACE_ID`.
 
 ## Publish Igris releases
 
@@ -104,20 +114,57 @@ the wrong public version.
 - Install with auto-enrollment as systemd service (Linux):
 
   ```sh
-  GATEWAY_URL=https://halo.example.com TOKEN=your-token \
-    curl -fsSL https://get.pipeops.dev/igris.sh | bash
+  curl -fsSL https://get.pipeops.dev/igris.sh | \
+    GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid bash
+  ```
+
+  Linux host installs with `WORKSPACE_ID` also install the Vortex network agent by default.
+  To install only Igris:
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/igris.sh | \
+    GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=false bash
   ```
 
 - Install a specific version:
 
   ```sh
-  IGRIS_VERSION=1.6.3 curl -fsSL https://get.pipeops.dev/igris.sh | bash
+  curl -fsSL https://get.pipeops.dev/igris.sh | IGRIS_VERSION=1.6.3 bash
   ```
 
 - Run manually after install:
 
   ```sh
-  igris --gateway-url https://halo.example.com --token YOUR_TOKEN
+  igris --gateway-url https://gateway.example.com --token YOUR_TOKEN
+  ```
+
+### Vortex Network Agent
+
+- Install latest Vortex agent:
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/vortex.sh | bash
+  ```
+
+- Install with auto-enrollment as systemd service:
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/vortex.sh | \
+    VORTEX_GATEWAY_URL=https://gateway.example.com \
+    VORTEX_BOOTSTRAP_TOKEN=your-token \
+    VORTEX_WORKSPACE_ID=workspace-uuid bash
+  ```
+
+- Install a specific version:
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/vortex.sh | VORTEX_VERSION=0.1.0 bash
+  ```
+
+- Run manually after install:
+
+  ```sh
+  sudo vortex --iface eth0
   ```
 
 ### PipeOps CLI
