@@ -19,12 +19,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck
       - name: Syntax check installers
-        run: bash -n igris.sh vortex.sh tests/igris_vortex_bundle_test.sh tests/vortex_installer_test.sh tests/igris_version_detection_test.sh
+        run: bash -n igris.sh vortex.sh tests/igris_vortex_bundle_test.sh tests/vortex_installer_test.sh tests/igris_version_detection_test.sh tests/igris_uninstall_test.sh
       - name: Run installer tests
         run: |
           bash tests/igris_vortex_bundle_test.sh
           bash tests/vortex_installer_test.sh
           bash tests/igris_version_detection_test.sh
+          bash tests/igris_uninstall_test.sh
       - name: Verify bundled Vortex installer checksum pin
         run: |
           expected="$(sed -n 's/^DEFAULT_VORTEX_INSTALLER_SHA256="\([a-f0-9]*\)"/\1/p' igris.sh)"
@@ -32,4 +33,4 @@ jobs:
           test -n "$expected"
           test "$expected" = "$actual"
       - name: ShellCheck
-        run: shellcheck -x -e SC2009,SC2064,SC2162 igris.sh vortex.sh tests/igris_vortex_bundle_test.sh tests/vortex_installer_test.sh tests/igris_version_detection_test.sh
+        run: shellcheck -x -e SC2009,SC2064,SC2162 igris.sh vortex.sh tests/igris_vortex_bundle_test.sh tests/vortex_installer_test.sh tests/igris_version_detection_test.sh tests/igris_uninstall_test.sh

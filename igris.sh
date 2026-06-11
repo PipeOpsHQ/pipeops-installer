@@ -2,6 +2,7 @@
 #
 # Igris Agent Installer
 # Usage: curl -fsSL https://get.pipeops.dev/igris.sh | bash
+# Uninstall: curl -fsSL https://get.pipeops.dev/igris.sh | bash -s -- uninstall
 #
 # Environment variables:
 #   IGRIS_VERSION      - Specific version to install (default: latest)
@@ -1052,6 +1053,88 @@ reset_agent_state_if_requested() {
     sudo rm -f "$state_file"
 }
 
+# ─── Uninstall ───────────────────────────────────────────────────────────────
+remove_igris_self_daemon() {
+    local binary_path="${INSTALL_DIR}/${BINARY_NAME}"
+    local pid_file="/var/lib/igris/igris.pid"
+
+    if [[ -x "$binary_path" ]]; then
+        sudo "$binary_path" --stop --pid-file="$pid_file" >/dev/null 2>&1 || true
+    fi
+}
+
+uninstall_igris_systemd() {
+    local service_file
+    service_file="$(resolve_systemd_service_file)"
+
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl stop igris || true
+        sudo systemctl disable igris || true
+    fi
+
+    sudo rm -f "$service_file" /etc/systemd/system/igris.service /run/systemd/system/igris.service
+
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl daemon-reload || true
+        sudo systemctl reset-failed igris || true
+    fi
+}
+
+uninstall_igris_openrc() {
+    if command -v rc-service >/dev/null 2>&1; then
+        sudo rc-service igris stop || true
+    fi
+
+    if command -v rc-update >/dev/null 2>&1; then
+        sudo rc-update del igris default || true
+    fi
+}
+
+uninstall_igris_launchd() {
+    local plist_file="/Library/LaunchDaemons/com.pipeops.igris.plist"
+
+    if command -v launchctl >/dev/null 2>&1; then
+        sudo launchctl bootout system "$plist_file" || true
+    fi
+}
+
+uninstall_bundled_vortex() {
+    local vortex_install_dir="${VORTEX_INSTALL_DIR:-/usr/local/bin}"
+
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl stop vortex || true
+        sudo systemctl disable vortex || true
+    fi
+
+    sudo rm -f "${vortex_install_dir}/vortex" "${vortex_install_dir}/vortex.exe" /etc/systemd/system/vortex.service
+    sudo rm -rf /etc/vortex /usr/lib/vortex /var/lib/vortex /var/log/vortex /run/vortex
+
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl daemon-reload || true
+        sudo systemctl reset-failed vortex || true
+    fi
+}
+
+uninstall_igris() {
+    ensure_sudo_available "uninstall Igris"
+
+    info "Stopping Igris services..."
+    remove_igris_self_daemon
+    uninstall_igris_systemd
+    uninstall_igris_openrc
+    uninstall_igris_launchd
+
+    info "Removing Igris files and persisted registration state..."
+    sudo rm -f "${INSTALL_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}.exe"
+    sudo rm -f /etc/default/igris /etc/conf.d/igris /etc/init.d/igris /Library/LaunchDaemons/com.pipeops.igris.plist
+    sudo rm -rf /var/lib/igris /var/log/igris "/Library/Application Support/Igris"
+
+    info "Removing bundled Vortex network agent files when present..."
+    uninstall_bundled_vortex
+
+    success "Igris has been uninstalled from this host."
+}
+
 # ─── Download Binary ─────────────────────────────────────────────────────────
 download_binary() {
     local platform="$1"
@@ -1593,6 +1676,9 @@ ${BLUE}Examples:${NC}
     GATEWAY_URL=https://gateway.example.com TOKEN=<agent-install-service-key> \
     WORKSPACE_ID=<workspace-uuid> INSTALL_VORTEX=false bash
 
+${BLUE}Uninstall:${NC}
+  curl -fsSL https://get.pipeops.dev/igris.sh | bash -s -- uninstall
+
 ${BLUE}Documentation:${NC}
   ${GITHUB_URL}
 
@@ -1751,6 +1837,17 @@ main() {
     echo "║           Autonomous Security for Every Environment           ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo ""
+
+    case "${1:-}" in
+        uninstall|remove)
+            uninstall_igris
+            return 0
+            ;;
+        help|--help|-h)
+            print_usage
+            return 0
+            ;;
+    esac
     
     # Detect platform
     local platform
