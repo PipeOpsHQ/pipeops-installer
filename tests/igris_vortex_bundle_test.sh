@@ -60,15 +60,27 @@ assert_should_not_install() {
 }
 
 
-test_defaults_to_vortex_for_linux_host_bootstrap() {
-  assert_should_install \
-    "linux host bootstrap defaults on" \
+test_skips_vortex_by_default_for_linux_host_bootstrap() {
+  assert_should_not_install \
+    "linux host bootstrap skips bundled Vortex by default" \
     IGRIS_INSTALLER_SKIP_MAIN=1 \
     IGRIS_TEST_OS=Linux \
     GATEWAY_URL=https://gateway.example.com \
     TOKEN=hsk_test \
     WORKSPACE_ID=workspace-1 \
     MODE=host
+}
+
+test_installs_vortex_when_explicitly_enabled() {
+  assert_should_install \
+    "explicit opt-in installs bundled Vortex" \
+    IGRIS_INSTALLER_SKIP_MAIN=1 \
+    IGRIS_TEST_OS=Linux \
+    GATEWAY_URL=https://gateway.example.com \
+    TOKEN=hsk_test \
+    WORKSPACE_ID=workspace-1 \
+    MODE=host \
+    INSTALL_VORTEX=true
 }
 
 test_skips_vortex_for_non_host_modes() {
@@ -92,6 +104,18 @@ test_skips_vortex_when_disabled() {
     WORKSPACE_ID=workspace-1 \
     MODE=host \
     INSTALL_VORTEX=false
+}
+
+test_skips_vortex_for_legacy_auto_setting() {
+  assert_should_not_install \
+    "legacy auto setting skips bundled Vortex" \
+    IGRIS_INSTALLER_SKIP_MAIN=1 \
+    IGRIS_TEST_OS=Linux \
+    GATEWAY_URL=https://gateway.example.com \
+    TOKEN=hsk_test \
+    WORKSPACE_ID=workspace-1 \
+    MODE=host \
+    INSTALL_VORTEX=auto
 }
 
 test_skips_vortex_for_unsupported_setting() {
@@ -243,6 +267,7 @@ test_install_hook_invokes_vortex_installer() {
   GATEWAY_URL=https://gateway.example.com \
   TOKEN=hsk_test \
   WORKSPACE_ID=workspace-1 \
+  INSTALL_VORTEX=true \
   VORTEX_INSTALLER_URL=https://get.pipeops.dev/vortex.sh \
     install_bundled_vortex_if_needed >/dev/null
 
@@ -254,9 +279,11 @@ test_install_hook_invokes_vortex_installer() {
   assert_contains_line "$contents" "VORTEX_INSTALL_SERVICE=true" "installer service env"
 }
 
-test_defaults_to_vortex_for_linux_host_bootstrap
+test_skips_vortex_by_default_for_linux_host_bootstrap
+test_installs_vortex_when_explicitly_enabled
 test_skips_vortex_for_non_host_modes
 test_skips_vortex_when_disabled
+test_skips_vortex_for_legacy_auto_setting
 test_skips_vortex_for_unsupported_setting
 test_skips_vortex_without_workspace
 test_builds_vortex_env_from_igris_context
