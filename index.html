@@ -22,12 +22,12 @@
         <h2>🛡️ Igris Security Agent</h2>
         <p>Install the Igris agent for autonomous security monitoring:</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | bash</code></pre>
-        <p>Install with auto-enrollment (Linux systemd service). Linux host installs with a workspace also install Vortex by default:</p>
+        <p>Install with auto-enrollment (Linux systemd service):</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | \
   GATEWAY_URL=https://gateway.example.com TOKEN=xxx WORKSPACE_ID=workspace-uuid bash</code></pre>
-        <p>Install only Igris:</p>
+        <p>Optionally include the Vortex network agent:</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | \
-  GATEWAY_URL=https://gateway.example.com TOKEN=xxx WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=false bash</code></pre>
+  GATEWAY_URL=https://gateway.example.com TOKEN=xxx WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=true bash</code></pre>
         <p>Pin a specific version:</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | IGRIS_VERSION=1.6.3 bash</code></pre>
       </div>

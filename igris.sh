@@ -12,7 +12,7 @@
 #   IGRIS_WORKSPACE_ID - Optional workspace ID/UUID override (alias: WORKSPACE_ID)
 #   IGRIS_MODE         - Deployment mode / agent type (alias: MODE)
 #   IGRIS_BINARY_BASE_URL - Optional base URL for raw/self-hosted binaries named igris-<os>-<arch>[.exe]
-#   INSTALL_VORTEX     - Install Vortex alongside Linux host installs (default: auto; aliases: IGRIS_INSTALL_VORTEX)
+#   INSTALL_VORTEX     - Install Vortex alongside Linux host installs (default: false; aliases: IGRIS_INSTALL_VORTEX)
 #   VORTEX_INSTALLER_URL - Optional Vortex installer URL (default: https://get.pipeops.dev/vortex.sh)
 #   VORTEX_INSTALLER_ALLOWED_HOSTS - Comma-separated allowlist for Vortex installer host(s)
 #   VORTEX_INSTALLER_SHA256 - SHA-256 checksum override for a custom downloaded Vortex installer script.
@@ -372,7 +372,7 @@ falsey_env() {
 }
 
 resolve_install_vortex() {
-    get_first_env IGRIS_INSTALL_VORTEX INSTALL_VORTEX || printf 'auto'
+    get_first_env IGRIS_INSTALL_VORTEX INSTALL_VORTEX || printf 'false'
 }
 
 vortex_bundle_required() {
@@ -393,6 +393,10 @@ should_install_bundled_vortex() {
         return 1
     fi
 
+    if [[ "$(lower_value "$setting")" == "auto" ]]; then
+        return 1
+    fi
+
     if [[ "$(current_os)" != "Linux" ]]; then
         return 1
     fi
@@ -408,7 +412,7 @@ should_install_bundled_vortex() {
         return 1
     fi
 
-    if [[ "$setting" == "auto" || -z "$setting" ]] || truthy_env "$setting"; then
+    if truthy_env "$setting"; then
         return 0
     fi
 
@@ -1656,7 +1660,7 @@ ${BLUE}Shorthand Aliases:${NC}
   TOKEN / IGRIS_AGENT_TOKEN
   WORKSPACE_ID / IGRIS_WORKSPACE_ID (optional workspace override)
   MODE / IGRIS_MODE
-  INSTALL_VORTEX / IGRIS_INSTALL_VORTEX (Linux host installs default to auto)
+  INSTALL_VORTEX / IGRIS_INSTALL_VORTEX (optional bundled network agent)
 
 ${BLUE}Examples:${NC}
   # Basic enrollment
@@ -1670,11 +1674,10 @@ ${BLUE}Examples:${NC}
   curl -fsSL https://get.pipeops.dev/igris.sh | \
     GATEWAY_URL=https://gateway.example.com TOKEN=<agent-install-service-key> MODE=host bash
 
-  # Linux host installs with WORKSPACE_ID also install Vortex by default.
-  # Disable the bundled network agent when needed:
+  # Optional: explicitly install the bundled Vortex network agent.
   curl -fsSL https://get.pipeops.dev/igris.sh | \
     GATEWAY_URL=https://gateway.example.com TOKEN=<agent-install-service-key> \
-    WORKSPACE_ID=<workspace-uuid> INSTALL_VORTEX=false bash
+    WORKSPACE_ID=<workspace-uuid> INSTALL_VORTEX=true bash
 
 ${BLUE}Uninstall:${NC}
   curl -fsSL https://get.pipeops.dev/igris.sh | bash -s -- uninstall

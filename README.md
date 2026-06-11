@@ -83,7 +83,7 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
   - The latest version is the highest `vMAJOR.MINOR.PATCH` release in that repo, not GitHub's `latest` label.
   - Optional: set `IGRIS_VERSION=1.6.3` to pin to a specific Igris release.
   - Optional: set `IGRIS_BINARY_BASE_URL` only for explicit raw/self-hosted artifact installs.
-  - Linux host installs with `GATEWAY_URL`, `TOKEN`, and `WORKSPACE_ID` install Vortex automatically. Set `INSTALL_VORTEX=false` or `IGRIS_INSTALL_VORTEX=false` to opt out.
+  - Linux host installs only install Igris by default. Set `INSTALL_VORTEX=true` or `IGRIS_INSTALL_VORTEX=true` to explicitly install Vortex alongside Igris.
   - Set `IGRIS_REQUIRE_VORTEX=true` when Vortex installation failure should fail the host install instead of warning and continuing.
 
 - `vortex.sh` variables:
@@ -118,12 +118,11 @@ the wrong public version.
     GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid bash
   ```
 
-  Linux host installs with `WORKSPACE_ID` also install the Vortex network agent by default.
-  To install only Igris:
+  Linux host installs only install Igris by default. To explicitly include the Vortex network agent:
 
   ```sh
   curl -fsSL https://get.pipeops.dev/igris.sh | \
-    GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=false bash
+    GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=true bash
   ```
 
 - Install a specific version:
