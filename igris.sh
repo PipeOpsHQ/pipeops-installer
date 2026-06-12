@@ -38,7 +38,7 @@ fi
 REQUESTED_VERSION="${IGRIS_VERSION:-}"
 # Used only when public release discovery fails. Keep this pinned to a published
 # PipeOpsHQ/pipeops-installer release with GoReleaser assets and checksums.txt.
-VERSION="1.6.3"
+VERSION="1.6.41"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
 REPO="${IGRIS_RELEASE_REPO:-PipeOpsHQ/pipeops-installer}"
