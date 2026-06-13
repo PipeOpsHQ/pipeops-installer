@@ -1,4 +1,4 @@
-name: Sync Igris Agent Release
+name: Sync Aeon Agent Release
 
 on:
   workflow_dispatch:
@@ -102,7 +102,7 @@ jobs:
           fi
 
           # Do not infer a default here. The halo repo has multiple historical
-          # Igris version lines; GitHub's latest label can regress the public
+          # Aeon Agent version lines; GitHub's latest label can regress the public
           # installer, while highest semver can select an old legacy-line build.
           # Public releases must be synced from an explicit, intentional tag.
           if [[ -z "$tag" ]]; then
@@ -131,7 +131,8 @@ jobs:
             --dir dist \
             --pattern '*.tar.gz' \
             --pattern '*.zip' \
-            --pattern 'checksums.txt'
+            --pattern 'checksums.txt' \
+            --pattern 'checksums.txt.sigstore.bundle'
 
           echo "Downloaded assets:"
           ls -lh dist/
@@ -159,7 +160,7 @@ jobs:
           tag='${{ steps.resolve.outputs.tag }}'
           version='${{ steps.resolve.outputs.version }}'
 
-          notes="Igris Agent ${version} — synced from [PipeOpsHQ/halo ${tag}](https://github.com/PipeOpsHQ/halo/releases/tag/${tag})"
+          notes="Aeon Agent ${version} — synced from [PipeOpsHQ/halo ${tag}](https://github.com/PipeOpsHQ/halo/releases/tag/${tag})"
 
           if [[ '${{ steps.check.outputs.exists }}' == 'true' ]]; then
             echo "Deleting existing release ${tag}..."
@@ -169,7 +170,7 @@ jobs:
           echo "Creating release ${tag}..."
           gh release create "$tag" \
             --repo "${{ github.repository }}" \
-            --title "Igris Agent ${version}" \
+            --title "Aeon Agent ${version}" \
             --notes "$notes" \
             dist/*
 
@@ -202,8 +203,8 @@ jobs:
           # entrypoint marker so we don't accidentally serve an unrelated
           # file if the upstream path ever moves.
           bash -n igris.sh.new
-          if ! grep -q 'Igris Agent Installer' igris.sh.new; then
-            echo "::error::Sanity check failed: downloaded script doesn't look like the Igris installer."
+          if ! grep -q 'Aeon Agent Installer' igris.sh.new; then
+            echo "::error::Sanity check failed: downloaded script doesn't look like the Aeon Agent installer."
             exit 1
           fi
 
