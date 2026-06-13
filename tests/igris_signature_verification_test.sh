@@ -29,7 +29,7 @@ export COSIGN_LOG="$tmp_dir/cosign.log"
 # shellcheck source=../igris.sh
 source "$repo_root/igris.sh"
 
-printf 'abc123  igris_1.2.3_linux_x86_64.tar.gz\n' > "$tmp_dir/checksums.txt"
+printf 'abc123  aeon-agent_1.2.3_linux_x86_64.tar.gz\n' > "$tmp_dir/checksums.txt"
 printf '{"fake":"bundle"}\n' > "$tmp_dir/checksums.txt.sigstore.bundle"
 
 verify_checksum_manifest_signature \
@@ -38,7 +38,7 @@ verify_checksum_manifest_signature \
   "https://example.test/checksums.txt.sigstore.bundle"
 
 grep -Fq -- 'verify-blob --bundle' "$COSIGN_LOG"
-grep -Fq -- '--certificate-identity-regexp ^https://github.com/PipeOpsHQ/halo/\\.github/workflows/release-agent.yml@refs/(heads|tags)/.*$' "$COSIGN_LOG"
+grep -Fq -- '--certificate-identity-regexp ^https://github.com/PipeOpsHQ/halo/\.github/workflows/release-agent.yml@refs/(heads|tags)/.*$' "$COSIGN_LOG"
 grep -Fq -- '--certificate-oidc-issuer https://token.actions.githubusercontent.com' "$COSIGN_LOG"
 grep -Fq -- "$tmp_dir/checksums.txt" "$COSIGN_LOG"
 

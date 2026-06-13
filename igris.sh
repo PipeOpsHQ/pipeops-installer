@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Igris Agent Installer
+# Aeon Agent Installer
 # Usage: curl -fsSL https://get.pipeops.dev/igris.sh | bash
 # Uninstall: curl -fsSL https://get.pipeops.dev/igris.sh | bash -s -- uninstall
 #
@@ -12,6 +12,7 @@
 #   IGRIS_WORKSPACE_ID - Optional workspace ID/UUID override (alias: WORKSPACE_ID)
 #   IGRIS_MODE         - Deployment mode / agent type (alias: MODE)
 #   IGRIS_BINARY_BASE_URL - Optional base URL for raw/self-hosted binaries named igris-<os>-<arch>[.exe]
+#   IGRIS_RELEASE_ASSET_NAME - GitHub release archive prefix (default: aeon-agent)
 #   INSTALL_VORTEX     - Install Vortex alongside Linux host installs (default: false; aliases: IGRIS_INSTALL_VORTEX)
 #   VORTEX_INSTALLER_URL - Optional Vortex installer URL (default: https://get.pipeops.dev/vortex.sh)
 #   VORTEX_INSTALLER_ALLOWED_HOSTS - Comma-separated allowlist for Vortex installer host(s)
@@ -44,6 +45,7 @@ REQUESTED_VERSION="${IGRIS_VERSION:-}"
 VERSION="1.6.41"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
+RELEASE_ASSET_NAME="${IGRIS_RELEASE_ASSET_NAME:-aeon-agent}"
 REPO="${IGRIS_RELEASE_REPO:-PipeOpsHQ/pipeops-installer}"
 GITHUB_URL="https://github.com/${REPO}"
 RELEASES_URL="${GITHUB_URL}/releases"
@@ -860,7 +862,7 @@ archive_name_for_platform() {
     format="tar.gz"
     [[ "$os" == "windows" ]] && format="zip"
 
-    printf '%s_%s_%s_%s.%s' "$BINARY_NAME" "$version" "$os" "$arch" "$format"
+    printf '%s_%s_%s_%s.%s' "$RELEASE_ASSET_NAME" "$version" "$os" "$arch" "$format"
 }
 
 sha256_file() {
@@ -1375,7 +1377,7 @@ create_systemd_service() {
 
     sudo tee "$service_file" > /dev/null << EOF
 [Unit]
-Description=Igris Security Agent
+Description=Aeon Agent
 Documentation=https://github.com/${REPO}
 After=network-online.target
 Wants=network-online.target
@@ -1507,8 +1509,8 @@ create_openrc_service() {
     sudo tee "$service_file" > /dev/null << EOF
 #!/sbin/openrc-run
 
-name="Igris Security Agent"
-description="Igris Security Agent"
+name="Aeon Agent"
+description="Aeon Agent"
 
 supervisor="supervise-daemon"
 command="/bin/sh"
@@ -1805,7 +1807,7 @@ create_daemonized_runtime() {
 # Required-Stop:     \$network \$remote_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: Igris Security Agent (self-daemonized)
+# Short-Description: Aeon Agent (self-daemonized)
 ### END INIT INFO
 
 ENV_FILE="${env_file}"
@@ -1868,7 +1870,7 @@ EOF
 main() {
     echo ""
     echo "╔═══════════════════════════════════════════════════════════════╗"
-    echo "║           Igris Agent Installer                               ║"
+    echo "║           Aeon Agent Installer                                ║"
     echo "║           Autonomous Security for Every Environment           ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo ""
