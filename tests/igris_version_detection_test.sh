@@ -47,7 +47,9 @@ chmod +x "$tmp_dir/fast-bin/igris"
 PATH="$tmp_dir/fast-bin:$PATH"
 hash -r
 
-parsed_version="$(detect_installed_version 1)"
+# The bounded-timeout behavior is covered above; use the installer default here
+# so normal version parsing is not flaky under concurrent CI load.
+parsed_version="$(detect_installed_version 5)"
 if [[ "$parsed_version" != "1.2.3" ]]; then
   fail "parsed version = $parsed_version, want 1.2.3"
 fi
