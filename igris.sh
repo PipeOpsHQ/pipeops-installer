@@ -1176,7 +1176,7 @@ download_binary() {
     local ext=""
     local filename
     local tag
-    
+
     version="$(normalize_version "$2")"
     [[ "$platform" == windows-* ]] && ext=".exe"
 
@@ -1241,11 +1241,11 @@ download_binary() {
     local url="${RELEASES_URL}/download/${tag}/${filename}"
     local checksum_url="${RELEASES_URL}/download/${tag}/checksums.txt"
     local checksum_bundle_url="${RELEASES_URL}/download/${tag}/checksums.txt.sigstore.bundle"
-    
+
     local tmp_dir
     tmp_dir=$(mktemp -d)
     trap "rm -rf ${tmp_dir}" EXIT
-    
+
     info "Downloading Igris Agent v${version} for ${platform}..."
 
     if command -v curl &> /dev/null || command -v wget &> /dev/null; then
@@ -1265,7 +1265,7 @@ download_binary() {
     else
         error "Neither curl nor wget found. Please install one of them."
     fi
-    
+
     cd "${tmp_dir}"
 
     verify_checksum_manifest_signature "checksums.txt" "checksums.txt.sigstore.bundle" "$checksum_bundle_url"
@@ -1291,14 +1291,14 @@ download_binary() {
     else
         tar -xzf "$filename"
     fi
-    
+
     # Install binary
     local binary="${BINARY_NAME}${ext}"
     local target="${INSTALL_DIR}/${BINARY_NAME}${ext}"
-    
+
     info "Installing to ${target}..."
     install_binary_file "$binary" "$target"
-    
+
     success "Igris Agent installed successfully!"
 }
 
@@ -1309,7 +1309,7 @@ create_systemd_service() {
     if [[ "$(uname -s)" != "Linux" ]]; then
         return
     fi
-    
+
     if ! command -v systemctl &> /dev/null; then
         return
     fi
@@ -1413,7 +1413,7 @@ EOF
 
     # Create data directories
     sudo mkdir -p /var/lib/igris /var/log/igris
-    
+
     # Reload, enable, and start immediately so one-line installs enroll right away.
     sudo systemctl daemon-reload
     if [[ "$runtime_unit" == "true" ]]; then
@@ -1423,7 +1423,7 @@ EOF
     fi
     sudo systemctl restart igris
     verify_systemd_service_active
-    
+
     success "Systemd service created and started!"
     IGRIS_SERVICE_STARTED="true"
     info "Check status with: sudo systemctl status igris"
@@ -1885,12 +1885,12 @@ main() {
             return 0
             ;;
     esac
-    
+
     # Detect platform
     local platform
     platform=$(detect_platform)
     info "Detected platform: ${platform}"
-    
+
     # Get version
     if [[ -n "${IGRIS_BINARY_BASE_URL:-}" && -z "$REQUESTED_VERSION" ]]; then
         VERSION="local"
@@ -1898,7 +1898,7 @@ main() {
         VERSION=$(get_latest_version)
     fi
     info "Version: ${VERSION}"
-    
+
     # Check if already installed, and decide whether to update, reinstall,
     # or skip based on a semver compare of installed vs target.
     local needs_install="true"
@@ -2039,7 +2039,7 @@ main() {
     fi
 
     install_bundled_vortex_if_needed
-    
+
     # Print usage
     print_usage
 }

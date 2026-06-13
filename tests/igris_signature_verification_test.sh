@@ -26,7 +26,7 @@ chmod +x "$tmp_dir/bin/cosign"
 export IGRIS_INSTALLER_SKIP_MAIN=1
 export PATH="$tmp_dir/bin:$PATH"
 export COSIGN_LOG="$tmp_dir/cosign.log"
-# shellcheck source=../igris.sh
+# shellcheck disable=SC1091
 source "$repo_root/igris.sh"
 
 printf 'abc123  aeon-agent_1.2.3_linux_x86_64.tar.gz\n' > "$tmp_dir/checksums.txt"
