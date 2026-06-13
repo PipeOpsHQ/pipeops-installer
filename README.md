@@ -12,7 +12,7 @@ Adjust variables in the scripts to match your release assets and binary naming.
 
 ## Files
 
-- `igris.sh` — Installs the Igris Security Agent from public `PipeOpsHQ/pipeops-installer` GitHub Releases (auto-detects OS/arch, optional service setup).
+- `igris.sh` — Installs the Aeon Agent from public `PipeOpsHQ/pipeops-installer` GitHub Releases (auto-detects OS/arch, optional service setup).
 - `vortex.sh` — Installs the Vortex Network Agent from public `PipeOpsHQ/vortex` GitHub Releases (Linux amd64/arm64, checksum verification, optional systemd service setup).
 - `cli.sh` — Installs the PipeOps CLI from GitHub Releases (auto-detects OS/arch).
 - `k8-install.sh` — Delegates to the upstream cluster/agent installer (`scripts/install.sh`).
@@ -103,7 +103,7 @@ the wrong public version.
 
 ## Usage
 
-### Igris Security Agent
+### Aeon Agent
 
 - Install latest Igris agent:
 
