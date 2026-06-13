@@ -22,6 +22,9 @@
 #                        for private release repo overrides or rate limits.
 #   IGRIS_RESET_STATE  - Set to 1/true with a fresh install key to remove
 #                        persisted registration state and re-enroll this host.
+#   IGRIS_COSIGN_CERTIFICATE_IDENTITY_REGEXP - Optional Sigstore certificate
+#                        identity regexp for checksum bundle verification.
+#   IGRIS_COSIGN_CERTIFICATE_OIDC_ISSUER - Optional Sigstore OIDC issuer.
 #
 
 set -euo pipefail
@@ -45,6 +48,8 @@ REPO="${IGRIS_RELEASE_REPO:-PipeOpsHQ/pipeops-installer}"
 GITHUB_URL="https://github.com/${REPO}"
 RELEASES_URL="${GITHUB_URL}/releases"
 IGRIS_SERVICE_STARTED="false"
+COSIGN_CERTIFICATE_IDENTITY_REGEXP="${IGRIS_COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/PipeOpsHQ/halo/\\.github/workflows/release-agent.yml@refs/(heads|tags)/.*$}"
+COSIGN_CERTIFICATE_OIDC_ISSUER="${IGRIS_COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 
 # GitHub auth is optional for the default public release repo. It is still
 # supported for private release repo overrides or environments that need a
@@ -868,6 +873,29 @@ sha256_file() {
     fi
 }
 
+verify_checksum_manifest_signature() {
+    local checksum_file="$1"
+    local bundle_file="$2"
+    local bundle_url="${3:-$bundle_file}"
+
+    if [[ ! -s "$bundle_file" ]]; then
+        error "Missing checksum Sigstore bundle: ${bundle_url}"
+    fi
+    if ! command -v cosign >/dev/null 2>&1; then
+        error "cosign is required to verify ${checksum_file}. Install cosign or use a release path with verified artifacts."
+    fi
+
+    info "Verifying checksum manifest signature..."
+    if ! cosign verify-blob \
+        --bundle "$bundle_file" \
+        --certificate-identity-regexp "$COSIGN_CERTIFICATE_IDENTITY_REGEXP" \
+        --certificate-oidc-issuer "$COSIGN_CERTIFICATE_OIDC_ISSUER" \
+        "$checksum_file" >/dev/null; then
+        error "Checksum manifest signature verification failed!"
+    fi
+    success "Checksum manifest signature verified"
+}
+
 # ─── GitHub HTTP helpers (token-aware) ───────────────────────────────────────
 # gh_api_get URL — GET a GitHub API URL to stdout, sending the auth token when
 # set. Returns curl/wget's exit status.
@@ -1210,6 +1238,7 @@ download_binary() {
 
     local url="${RELEASES_URL}/download/${tag}/${filename}"
     local checksum_url="${RELEASES_URL}/download/${tag}/checksums.txt"
+    local checksum_bundle_url="${RELEASES_URL}/download/${tag}/checksums.txt.sigstore.bundle"
     
     local tmp_dir
     tmp_dir=$(mktemp -d)
@@ -1230,11 +1259,14 @@ download_binary() {
             fi
         fi
         gh_download_file "$checksum_url" "${tmp_dir}/checksums.txt" 2>/dev/null || error "Failed to download checksum manifest: $checksum_url"
+        gh_download_file "$checksum_bundle_url" "${tmp_dir}/checksums.txt.sigstore.bundle" 2>/dev/null || error "Failed to download checksum Sigstore bundle: $checksum_bundle_url"
     else
         error "Neither curl nor wget found. Please install one of them."
     fi
     
     cd "${tmp_dir}"
+
+    verify_checksum_manifest_signature "checksums.txt" "checksums.txt.sigstore.bundle" "$checksum_bundle_url"
 
     # Verify the downloaded release archive against GoReleaser's checksums.txt.
     info "Verifying checksum..."
