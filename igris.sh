@@ -42,7 +42,7 @@ fi
 REQUESTED_VERSION="${IGRIS_VERSION:-}"
 # Used only when public release discovery fails. Keep this pinned to a published
 # PipeOpsHQ/pipeops-installer release with GoReleaser assets and checksums.txt.
-VERSION="1.6.41"
+VERSION="1.6.46"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
 RELEASE_ASSET_NAME="${IGRIS_RELEASE_ASSET_NAME:-aeon-agent}"
