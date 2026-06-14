@@ -5,13 +5,14 @@
 # Uninstall: curl -fsSL https://get.pipeops.dev/igris.sh | bash -s -- uninstall
 #
 # Environment variables:
-#   IGRIS_VERSION      - Specific version to install (default: latest)
+#   IGRIS_VERSION      - Specific version to install from public releases (default: latest)
 #   IGRIS_INSTALL_DIR  - Installation directory (default: /usr/local/bin)
 #   IGRIS_GATEWAY_URL  - Gateway URL (alias: GATEWAY_URL)
 #   IGRIS_AGENT_TOKEN  - Agent bootstrap JWT or API key (aliases: IGRIS_TOKEN, TOKEN)
 #   IGRIS_WORKSPACE_ID - Optional workspace ID/UUID override (alias: WORKSPACE_ID)
 #   IGRIS_MODE         - Deployment mode / agent type (alias: MODE)
-#   IGRIS_BINARY_BASE_URL - Optional base URL for raw/self-hosted binaries named igris-<os>-<arch>[.exe]
+#   IGRIS_BINARY_BASE_URL - Optional override for raw binaries named igris-<os>-<arch>[.exe]
+#                        (default when GATEWAY_URL is set: <GATEWAY_URL>/dist)
 #   IGRIS_RELEASE_ASSET_NAME - GitHub release archive prefix (default: aeon-agent)
 #   INSTALL_VORTEX     - Install Vortex alongside Linux host installs (default: false; aliases: IGRIS_INSTALL_VORTEX)
 #   VORTEX_INSTALLER_URL - Optional Vortex installer URL (default: https://get.pipeops.dev/vortex.sh)
@@ -42,7 +43,7 @@ fi
 REQUESTED_VERSION="${IGRIS_VERSION:-}"
 # Used only when public release discovery fails. Keep this pinned to a published
 # PipeOpsHQ/pipeops-installer release with GoReleaser assets and checksums.txt.
-VERSION="1.6.46"
+VERSION="1.6.47"
 INSTALL_DIR="${IGRIS_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="igris"
 RELEASE_ASSET_NAME="${IGRIS_RELEASE_ASSET_NAME:-aeon-agent}"
@@ -123,6 +124,39 @@ resolve_gateway_url() {
 
 resolve_agent_token() {
     get_first_env IGRIS_AGENT_TOKEN IGRIS_TOKEN TOKEN || true
+}
+
+resolve_igris_binary_base_url() {
+    if [[ -n "${IGRIS_BINARY_BASE_URL:-}" ]]; then
+        printf '%s' "${IGRIS_BINARY_BASE_URL%/}"
+        return
+    fi
+
+    local gateway_url
+    gateway_url="$(resolve_gateway_url)"
+    if [[ -n "$gateway_url" ]]; then
+        printf '%s/dist' "${gateway_url%/}"
+    fi
+}
+
+resolve_target_version() {
+    local binary_base_url="$1"
+
+    if [[ -n "$REQUESTED_VERSION" ]]; then
+        normalize_version "$REQUESTED_VERSION"
+    elif [[ -n "$binary_base_url" ]]; then
+        printf 'local'
+    else
+        get_latest_version
+    fi
+}
+
+warn_raw_artifact_version_pin() {
+    local binary_base_url="$1"
+
+    if [[ -n "$binary_base_url" && -n "$REQUESTED_VERSION" ]]; then
+        warn "IGRIS_VERSION=${REQUESTED_VERSION} does not pin gateway/raw artifact downloads; using the artifact currently served at ${binary_base_url}."
+    fi
 }
 
 allow_insecure_http() {
@@ -1180,8 +1214,14 @@ download_binary() {
     version="$(normalize_version "$2")"
     [[ "$platform" == windows-* ]] && ext=".exe"
 
-    if [[ -n "${IGRIS_BINARY_BASE_URL:-}" ]]; then
-        local raw_base="${IGRIS_BINARY_BASE_URL%/}"
+    local binary_base_url
+    binary_base_url="${3:-}"
+    if [[ -z "$binary_base_url" ]]; then
+        binary_base_url="$(resolve_igris_binary_base_url)"
+    fi
+
+    if [[ -n "$binary_base_url" ]]; then
+        local raw_base="$binary_base_url"
         local raw_binary="${BINARY_NAME}-${platform}${ext}"
         local raw_url="${raw_base}/${raw_binary}"
         local raw_checksum_url="${raw_base}/checksums.txt"
@@ -1253,7 +1293,7 @@ download_binary() {
             if [[ -z "$GITHUB_TOKEN_VALUE" ]]; then
                 error "Failed to download ${url}
   Verify release ${tag} exists in ${REPO} and contains ${filename}.
-  For explicit artifact-server installs, set IGRIS_BINARY_BASE_URL."
+  If this is a gateway install, verify GATEWAY_URL is set and serves /dist artifacts."
             else
                 error "Failed to download ${url}
   A token was provided but the download failed — verify the token has access to ${REPO}
@@ -1892,11 +1932,10 @@ main() {
     info "Detected platform: ${platform}"
 
     # Get version
-    if [[ -n "${IGRIS_BINARY_BASE_URL:-}" && -z "$REQUESTED_VERSION" ]]; then
-        VERSION="local"
-    elif [[ -z "$REQUESTED_VERSION" ]]; then
-        VERSION=$(get_latest_version)
-    fi
+    local binary_base_url
+    binary_base_url="$(resolve_igris_binary_base_url)"
+    VERSION="$(resolve_target_version "$binary_base_url")"
+    warn_raw_artifact_version_pin "$binary_base_url"
     info "Version: ${VERSION}"
 
     # Check if already installed, and decide whether to update, reinstall,
@@ -1972,7 +2011,7 @@ main() {
 
     if [[ "$needs_install" == "true" ]]; then
         # Download and install
-        download_binary "$platform" "$VERSION"
+        download_binary "$platform" "$VERSION" "$binary_base_url"
     else
         if has_bootstrap_env; then
             info "Igris binary is already installed; ensuring the background service is configured."
