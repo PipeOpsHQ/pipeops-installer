@@ -83,7 +83,8 @@ In `pipeopshq/pipeops-k8-agent` you can add a step after creating a release to n
   - The latest version is the highest `vMAJOR.MINOR.PATCH` release in that repo, not GitHub's `latest` label.
   - Optional: set `IGRIS_VERSION=1.6.3` to pin to a specific Igris release.
   - Optional: set `IGRIS_BINARY_BASE_URL` only for explicit raw/self-hosted artifact installs.
-  - Linux host installs only install Igris by default. Set `INSTALL_VORTEX=true` or `IGRIS_INSTALL_VORTEX=true` to explicitly install Vortex alongside Igris.
+  - Linux host installs only install Igris by default. Set `INSTALL_VORTEX=true` or `IGRIS_INSTALL_VORTEX=true` to bundle Vortex in **unified mode**: the Vortex binary is installed without its own service or enrollment and Igris supervises it (`IGRIS_MANAGE_VORTEX=true`), so host and network telemetry report as **one** agent.
+  - Set `INSTALL_VORTEX=standalone` for the legacy bundle: Vortex enrolls itself and runs its own systemd service with a separate agent identity.
   - Set `IGRIS_REQUIRE_VORTEX=true` when Vortex installation failure should fail the host install instead of warning and continuing.
 
 - `vortex.sh` variables:
@@ -118,11 +119,18 @@ the wrong public version.
     GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid bash
   ```
 
-  Linux host installs only install Igris by default. To explicitly include the Vortex network agent:
+  Linux host installs only install Igris by default. To include the Vortex network agent as a single unified agent (Igris supervises the Vortex binary and both engines report with one identity):
 
   ```sh
   curl -fsSL https://get.pipeops.dev/igris.sh | \
-    GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=true bash
+    GATEWAY_URL=https://gateway.example.com TOKEN=your-token INSTALL_VORTEX=true bash
+  ```
+
+  To keep the legacy behavior — Vortex as its own service with a separate agent identity:
+
+  ```sh
+  curl -fsSL https://get.pipeops.dev/igris.sh | \
+    GATEWAY_URL=https://gateway.example.com TOKEN=your-token WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=standalone bash
   ```
 
 - Install a specific version:

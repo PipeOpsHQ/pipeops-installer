@@ -14,7 +14,14 @@
 #   IGRIS_BINARY_BASE_URL - Optional override for raw binaries named igris-<os>-<arch>[.exe]
 #                        (default when GATEWAY_URL is set: <GATEWAY_URL>/dist)
 #   IGRIS_RELEASE_ASSET_NAME - GitHub release archive prefix (default: aeon-agent)
-#   INSTALL_VORTEX     - Install Vortex alongside Linux host installs (default: false; aliases: IGRIS_INSTALL_VORTEX)
+#   INSTALL_VORTEX     - Bundle the Vortex network agent on Linux host installs
+#                        (default: false; aliases: IGRIS_INSTALL_VORTEX).
+#                        true/unified → unified install: the Vortex binary is
+#                        installed WITHOUT its own service or enrollment and
+#                        Igris supervises it (IGRIS_MANAGE_VORTEX=true), so host
+#                        and network engines report as ONE agent.
+#                        standalone → legacy install: Vortex gets its own systemd
+#                        service, enrollment env, and separate agent identity.
 #   VORTEX_INSTALLER_URL - Optional Vortex installer URL (default: https://get.pipeops.dev/vortex.sh)
 #   VORTEX_INSTALLER_ALLOWED_HOSTS - Comma-separated allowlist for Vortex installer host(s)
 #   VORTEX_INSTALLER_SHA256 - SHA-256 checksum override for a custom downloaded Vortex installer script.
@@ -51,6 +58,10 @@ REPO="${IGRIS_RELEASE_REPO:-PipeOpsHQ/pipeops-installer}"
 GITHUB_URL="https://github.com/${REPO}"
 RELEASES_URL="${GITHUB_URL}/releases"
 IGRIS_SERVICE_STARTED="false"
+# Set by the unified vortex bundle install so the agent env file enables
+# igris-managed vortex supervision (both engines report as ONE agent).
+IGRIS_MANAGE_VORTEX_SUPERVISION="false"
+IGRIS_SUPERVISED_VORTEX_BINARY=""
 COSIGN_CERTIFICATE_IDENTITY_REGEXP="${IGRIS_COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/PipeOpsHQ/halo/\\.github/workflows/release-agent.yml@refs/(heads|tags)/.*$}"
 COSIGN_CERTIFICATE_OIDC_ISSUER="${IGRIS_COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 
@@ -60,7 +71,7 @@ COSIGN_CERTIFICATE_OIDC_ISSUER="${IGRIS_COSIGN_CERTIFICATE_OIDC_ISSUER:-https://
 GITHUB_TOKEN_VALUE="${IGRIS_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
 VORTEX_INSTALLER_ALLOWED_HOSTS="${VORTEX_INSTALLER_ALLOWED_HOSTS:-get.pipeops.dev}"
 DEFAULT_VORTEX_INSTALLER_URL="https://get.pipeops.dev/vortex.sh"
-DEFAULT_VORTEX_INSTALLER_SHA256="18e4da8407705962672f4a697f26497203626ff6db065a8e75660b5aa5ad2b06"
+DEFAULT_VORTEX_INSTALLER_SHA256="fc9ce6c8fff24f3088d9b9028a1f9a7a8b317b5cbd19e5a79b3bc29128af2c41"
 
 # Colors for output
 RED=$'\033[0;31m'
@@ -426,17 +437,58 @@ vortex_installer_url() {
     printf '%s' "${VORTEX_INSTALLER_URL:-$DEFAULT_VORTEX_INSTALLER_URL}"
 }
 
-should_install_bundled_vortex() {
-    local setting requested_mode mode
+# Classify the INSTALL_VORTEX/IGRIS_INSTALL_VORTEX setting:
+#   none        - bundle disabled (unset, false-ish, or legacy "auto")
+#   unified     - true-ish/"unified": binary-only vortex supervised by igris,
+#                 both engines report as ONE agent (default bundle behavior)
+#   standalone  - legacy bundle: vortex enrolls itself and runs its own
+#                 systemd service with a separate agent identity
+#   unsupported - unrecognized value
+resolve_vortex_bundle_mode() {
+    local setting
     setting="$(resolve_install_vortex)"
 
     if falsey_env "$setting"; then
-        return 1
+        printf 'none'
+        return
     fi
 
-    if [[ "$(lower_value "$setting")" == "auto" ]]; then
-        return 1
+    case "$(lower_value "$setting")" in
+        auto)
+            printf 'none'
+            return
+            ;;
+        standalone)
+            printf 'standalone'
+            return
+            ;;
+        unified)
+            printf 'unified'
+            return
+            ;;
+    esac
+
+    if truthy_env "$setting"; then
+        printf 'unified'
+        return
     fi
+
+    printf 'unsupported'
+}
+
+should_install_bundled_vortex() {
+    local bundle_mode requested_mode mode
+    bundle_mode="$(resolve_vortex_bundle_mode)"
+
+    case "$bundle_mode" in
+        none)
+            return 1
+            ;;
+        unsupported)
+            warn "Unsupported INSTALL_VORTEX/IGRIS_INSTALL_VORTEX value '$(resolve_install_vortex)'; skipping bundled network agent install. Use true (unified) or standalone."
+            return 1
+            ;;
+    esac
 
     if [[ "$(current_os)" != "Linux" ]]; then
         return 1
@@ -449,18 +501,36 @@ should_install_bundled_vortex() {
         return 1
     fi
 
-    if [[ -z "$(resolve_gateway_url)" || -z "$(resolve_agent_token)" || -z "$(resolve_workspace_id)" ]]; then
+    if [[ -z "$(resolve_gateway_url)" || -z "$(resolve_agent_token)" ]]; then
         return 1
     fi
 
-    if truthy_env "$setting"; then
-        return 0
+    # Standalone vortex enrolls itself, so it additionally needs a workspace.
+    # Unified vortex never enrolls (igris shares its own identity), so the
+    # igris service requirements (gateway + token) are enough.
+    if [[ "$bundle_mode" == "standalone" && -z "$(resolve_workspace_id)" ]]; then
+        return 1
     fi
 
-    warn "Unsupported INSTALL_VORTEX/IGRIS_INSTALL_VORTEX value '${setting}'; skipping bundled network agent install."
-    return 1
+    return 0
 }
 
+# Env for the UNIFIED bundle: binary-only vortex install with no service, no
+# enrollment env, and no registration. Igris supervises the binary with its own
+# issued identity (IGRIS_MANAGE_VORTEX), so no credentials are handed to the
+# vortex installer at all.
+build_vortex_binary_only_env_lines() {
+    emit_vortex_env_assignment "VORTEX_BINARY_ONLY" "true"
+    emit_vortex_env_assignment "VORTEX_INSTALL_SERVICE" "false"
+    [[ -n "${VORTEX_INSTALL_DIR:-}" ]] && emit_vortex_env_assignment "VORTEX_INSTALL_DIR" "$VORTEX_INSTALL_DIR"
+    [[ -n "${VORTEX_VERSION:-}" ]] && emit_vortex_env_assignment "VORTEX_VERSION" "$VORTEX_VERSION"
+    [[ -n "${VORTEX_RELEASE_REPO:-}" ]] && emit_vortex_env_assignment "VORTEX_RELEASE_REPO" "$VORTEX_RELEASE_REPO"
+    [[ -n "${VORTEX_GITHUB_TOKEN:-}" ]] && emit_vortex_env_assignment "VORTEX_GITHUB_TOKEN" "$VORTEX_GITHUB_TOKEN"
+    return 0
+}
+
+# Env for the STANDALONE (legacy) bundle: vortex enrolls with the gateway using
+# its own identity and runs as its own systemd service.
 build_vortex_env_lines() {
     local gateway_url token workspace_id tenant_id org_id
     gateway_url="$(resolve_gateway_url)"
@@ -528,25 +598,50 @@ run_vortex_installer() {
 }
 
 install_bundled_vortex_if_needed() {
-    local installer_url env_line
+    local bundle_mode installer_url env_line
     local env_args=()
 
     if ! should_install_bundled_vortex; then
         return 0
     fi
 
+    bundle_mode="$(resolve_vortex_bundle_mode)"
     installer_url="$(vortex_installer_url)"
-    while IFS= read -r env_line; do
-        [[ -n "$env_line" ]] && env_args+=("$env_line")
-    done < <(build_vortex_env_lines)
 
-    local agent_token
-    agent_token="$(resolve_agent_token)"
-    refuse_insecure_artifact_token "$installer_url" "$agent_token"
-    info "Installing bundled network agent..."
-    if run_vortex_installer "$installer_url" "${env_args[@]}"; then
-        success "Bundled network agent installed."
-        return 0
+    if [[ "$bundle_mode" == "unified" ]]; then
+        # Migration: a host previously installed with the old standalone bundle has
+        # its own vortex.service (separate identity, separate heartbeat). Tear that
+        # service down before the unified install, otherwise Igris would supervise
+        # the Vortex binary WHILE the legacy service keeps running — the exact
+        # two-agents state this unified mode exists to remove.
+        migrate_standalone_vortex_service
+
+        while IFS= read -r env_line; do
+            [[ -n "$env_line" ]] && env_args+=("$env_line")
+        done < <(build_vortex_binary_only_env_lines)
+
+        info "Installing bundled network agent (unified: supervised by Igris as one agent)..."
+        if run_vortex_installer "$installer_url" "${env_args[@]}"; then
+            IGRIS_MANAGE_VORTEX_SUPERVISION="true"
+            if [[ -n "${VORTEX_INSTALL_DIR:-}" ]]; then
+                IGRIS_SUPERVISED_VORTEX_BINARY="${VORTEX_INSTALL_DIR%/}/vortex"
+            fi
+            success "Bundled network agent binary installed; Igris will supervise it."
+            return 0
+        fi
+    else
+        while IFS= read -r env_line; do
+            [[ -n "$env_line" ]] && env_args+=("$env_line")
+        done < <(build_vortex_env_lines)
+
+        local agent_token
+        agent_token="$(resolve_agent_token)"
+        refuse_insecure_artifact_token "$installer_url" "$agent_token"
+        info "Installing bundled network agent (standalone: separate service + identity)..."
+        if run_vortex_installer "$installer_url" "${env_args[@]}"; then
+            success "Bundled network agent installed."
+            return 0
+        fi
     fi
 
     if vortex_bundle_required; then
@@ -667,6 +762,14 @@ write_agent_env_file() {
         [[ -n "$tenant_id" ]] && printf 'IGRIS_TENANT_ID=%s\n' "$tenant_id"
         [[ -n "$org_id" ]] && printf 'IGRIS_ORG_ID=%s\n' "$org_id"
         printf 'IGRIS_MODE=%s\n' "$mode"
+        if [[ "${IGRIS_MANAGE_VORTEX_SUPERVISION:-false}" == "true" ]]; then
+            # Unified vortex bundle: igris supervises the vortex binary and
+            # shares its own issued identity, so both report as ONE agent.
+            printf 'IGRIS_MANAGE_VORTEX=true\n'
+            if [[ -n "${IGRIS_SUPERVISED_VORTEX_BINARY:-}" ]]; then
+                printf 'IGRIS_VORTEX_BINARY=%s\n' "$IGRIS_SUPERVISED_VORTEX_BINARY"
+            fi
+        fi
     } > "$tmp_file"
     sudo sh -c 'umask 077; cat "$1" > "$2"' sh "$tmp_file" "$env_file" || error "Failed to write ${env_file}."
     sudo chmod 600 "$env_file" || error "Failed to secure ${env_file}."
@@ -1164,6 +1267,25 @@ uninstall_igris_launchd() {
     if command -v launchctl >/dev/null 2>&1; then
         sudo launchctl bootout system "$plist_file" || true
     fi
+}
+
+# migrate_standalone_vortex_service removes a pre-existing STANDALONE vortex
+# systemd service before a unified install, so a host upgraded from the old
+# two-agent bundle doesn't keep the legacy Vortex daemon running (and
+# heartbeating as a second agent) alongside the Igris-supervised Vortex binary.
+# Only the standalone unit is removed — the vortex binary is left in place for
+# Igris to supervise. Idempotent: a no-op when no standalone service exists.
+migrate_standalone_vortex_service() {
+    [[ -f /etc/systemd/system/vortex.service ]] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+
+    info "Detected a standalone Vortex service from a prior install; removing it so Igris supervises Vortex as a single agent..."
+    sudo systemctl stop vortex 2>/dev/null || true
+    sudo systemctl disable vortex 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/vortex.service
+    sudo systemctl daemon-reload 2>/dev/null || true
+    sudo systemctl reset-failed vortex 2>/dev/null || true
+    success "Removed legacy standalone Vortex service; Vortex is now supervised by Igris."
 }
 
 uninstall_bundled_vortex() {
@@ -1734,7 +1856,8 @@ ${BLUE}Shorthand Aliases:${NC}
   TOKEN / IGRIS_AGENT_TOKEN
   WORKSPACE_ID / IGRIS_WORKSPACE_ID (optional workspace override)
   MODE / IGRIS_MODE
-  INSTALL_VORTEX / IGRIS_INSTALL_VORTEX (optional bundled network agent)
+  INSTALL_VORTEX / IGRIS_INSTALL_VORTEX (optional bundled network agent;
+    true = unified single-agent install, standalone = legacy separate agent)
 
 ${BLUE}Examples:${NC}
   # Basic enrollment
@@ -1748,10 +1871,18 @@ ${BLUE}Examples:${NC}
   curl -fsSL https://get.pipeops.dev/igris.sh | \
     GATEWAY_URL=https://gateway.example.com TOKEN=<agent-install-service-key> MODE=host bash
 
-  # Optional: explicitly install the bundled Vortex network agent.
+  # Optional: bundle the Vortex network agent in UNIFIED mode. Vortex is
+  # installed binary-only and supervised by Igris (IGRIS_MANAGE_VORTEX=true),
+  # so host + network telemetry report as ONE agent.
   curl -fsSL https://get.pipeops.dev/igris.sh | \
     GATEWAY_URL=https://gateway.example.com TOKEN=<agent-install-service-key> \
-    WORKSPACE_ID=<workspace-uuid> INSTALL_VORTEX=true bash
+    INSTALL_VORTEX=true bash
+
+  # Legacy: bundle Vortex as a STANDALONE agent with its own systemd service,
+  # enrollment, and separate agent identity (pre-unified behavior).
+  curl -fsSL https://get.pipeops.dev/igris.sh | \
+    GATEWAY_URL=https://gateway.example.com TOKEN=<agent-install-service-key> \
+    WORKSPACE_ID=<workspace-uuid> INSTALL_VORTEX=standalone bash
 
 ${BLUE}Uninstall:${NC}
   curl -fsSL https://get.pipeops.dev/igris.sh | bash -s -- uninstall
@@ -2047,6 +2178,19 @@ main() {
         restart_running_service
     fi
 
+    # UNIFIED vortex bundle (INSTALL_VORTEX=true): install the vortex binary
+    # BEFORE the igris service is configured/started so (a) the supervised
+    # binary already exists when igris first boots and its vortex supervisor
+    # checks for it, and (b) IGRIS_MANAGE_VORTEX lands in the agent env file
+    # the create_*_service functions write below. The unsupported-value warn
+    # also fires here. The legacy STANDALONE bundle runs after the igris
+    # service, exactly as before.
+    local vortex_bundle_mode
+    vortex_bundle_mode="$(resolve_vortex_bundle_mode)"
+    if [[ "$vortex_bundle_mode" == "unified" || "$vortex_bundle_mode" == "unsupported" ]]; then
+        install_bundled_vortex_if_needed
+    fi
+
     # Create a service when supported. In curl|bash flows stdin is not a TTY,
     # so auto-configure when bootstrap env vars are provided. When none of the
     # standard service managers are available (minimal containers, LXC without
@@ -2077,7 +2221,9 @@ main() {
         fi
     fi
 
-    install_bundled_vortex_if_needed
+    if [[ "$vortex_bundle_mode" == "standalone" ]]; then
+        install_bundled_vortex_if_needed
+    fi
 
     # Print usage
     print_usage

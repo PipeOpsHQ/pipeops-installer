@@ -83,6 +83,30 @@ test_installs_vortex_when_explicitly_enabled() {
     INSTALL_VORTEX=true
 }
 
+test_installs_vortex_standalone_mode() {
+  assert_should_install \
+    "standalone opt-in installs bundled Vortex" \
+    IGRIS_INSTALLER_SKIP_MAIN=1 \
+    IGRIS_TEST_OS=Linux \
+    GATEWAY_URL=https://gateway.example.com \
+    TOKEN=hsk_test \
+    WORKSPACE_ID=workspace-1 \
+    MODE=host \
+    INSTALL_VORTEX=standalone
+}
+
+test_resolve_vortex_bundle_mode() {
+  assert_eq "none" "$(resolve_vortex_bundle_mode)" "bundle mode defaults to none"
+  assert_eq "none" "$(INSTALL_VORTEX=false resolve_vortex_bundle_mode)" "false maps to none"
+  assert_eq "none" "$(INSTALL_VORTEX=auto resolve_vortex_bundle_mode)" "legacy auto maps to none"
+  assert_eq "unified" "$(INSTALL_VORTEX=true resolve_vortex_bundle_mode)" "true maps to unified"
+  assert_eq "unified" "$(INSTALL_VORTEX=unified resolve_vortex_bundle_mode)" "unified maps to unified"
+  assert_eq "unified" "$(IGRIS_INSTALL_VORTEX=yes resolve_vortex_bundle_mode)" "yes alias maps to unified"
+  assert_eq "standalone" "$(INSTALL_VORTEX=standalone resolve_vortex_bundle_mode)" "standalone maps to standalone"
+  assert_eq "standalone" "$(INSTALL_VORTEX=STANDALONE resolve_vortex_bundle_mode)" "standalone is case-insensitive"
+  assert_eq "unsupported" "$(INSTALL_VORTEX=maybe resolve_vortex_bundle_mode)" "unknown maps to unsupported"
+}
+
 test_skips_vortex_for_non_host_modes() {
   assert_should_not_install \
     "kubernetes bootstrap skips bundled Vortex" \
@@ -130,14 +154,37 @@ test_skips_vortex_for_unsupported_setting() {
     INSTALL_VORTEX=maybe
 }
 
-test_skips_vortex_without_workspace() {
+test_skips_standalone_vortex_without_workspace() {
   assert_should_not_install \
-    "workspace is required for Vortex enrollment" \
+    "workspace is required for standalone Vortex enrollment" \
     IGRIS_INSTALLER_SKIP_MAIN=1 \
     IGRIS_TEST_OS=Linux \
     GATEWAY_URL=https://gateway.example.com \
     TOKEN=hsk_test \
-    MODE=host
+    MODE=host \
+    INSTALL_VORTEX=standalone
+}
+
+test_unified_vortex_does_not_require_workspace() {
+  assert_should_install \
+    "unified Vortex needs no workspace (no enrollment of its own)" \
+    IGRIS_INSTALLER_SKIP_MAIN=1 \
+    IGRIS_TEST_OS=Linux \
+    GATEWAY_URL=https://gateway.example.com \
+    TOKEN=hsk_test \
+    MODE=host \
+    INSTALL_VORTEX=true
+}
+
+test_skips_unified_vortex_on_non_linux() {
+  assert_should_not_install \
+    "unified Vortex bundle is Linux-only" \
+    IGRIS_INSTALLER_SKIP_MAIN=1 \
+    IGRIS_TEST_OS=Darwin \
+    GATEWAY_URL=https://gateway.example.com \
+    TOKEN=hsk_test \
+    MODE=host \
+    INSTALL_VORTEX=true
 }
 
 test_builds_vortex_env_from_igris_context() {
@@ -249,7 +296,28 @@ test_vortex_installer_checksum_validation() {
   fi
 }
 
-test_install_hook_invokes_vortex_installer() {
+test_builds_binary_only_env_for_unified_bundle() {
+  local lines
+
+  lines="$(
+    GATEWAY_URL=https://gateway.example.com \
+    TOKEN=hsk_test \
+    WORKSPACE_ID=workspace-1 \
+    VORTEX_INSTALL_DIR=/opt/aeon/bin \
+    VORTEX_VERSION=1.2.3 \
+    build_vortex_binary_only_env_lines
+  )"
+
+  assert_contains_line "$lines" "VORTEX_BINARY_ONLY=true" "binary-only env"
+  assert_contains_line "$lines" "VORTEX_INSTALL_SERVICE=false" "no-service env"
+  assert_contains_line "$lines" "VORTEX_INSTALL_DIR=/opt/aeon/bin" "install dir env"
+  assert_contains_line "$lines" "VORTEX_VERSION=1.2.3" "version env"
+  if grep -Eq '^VORTEX_(GATEWAY_URL|BOOTSTRAP_TOKEN|WORKSPACE_ID|TENANT_ID|ORG_ID)=' <<< "$lines"; then
+    fail "unified bundle must not forward enrollment env to the vortex installer"
+  fi
+}
+
+test_standalone_install_hook_invokes_vortex_installer() {
   local tmp contents
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' RETURN
@@ -264,10 +332,11 @@ test_install_hook_invokes_vortex_installer() {
     } > "$tmp"
   }
 
+  IGRIS_MANAGE_VORTEX_SUPERVISION="false"
   GATEWAY_URL=https://gateway.example.com \
   TOKEN=hsk_test \
   WORKSPACE_ID=workspace-1 \
-  INSTALL_VORTEX=true \
+  INSTALL_VORTEX=standalone \
   VORTEX_INSTALLER_URL=https://get.pipeops.dev/vortex.sh \
     install_bundled_vortex_if_needed >/dev/null
 
@@ -277,19 +346,139 @@ test_install_hook_invokes_vortex_installer() {
   assert_contains_line "$contents" "VORTEX_BOOTSTRAP_TOKEN=hsk_test" "installer token env"
   assert_contains_line "$contents" "VORTEX_WORKSPACE_ID=workspace-1" "installer workspace env"
   assert_contains_line "$contents" "VORTEX_INSTALL_SERVICE=true" "installer service env"
+  assert_eq "false" "$IGRIS_MANAGE_VORTEX_SUPERVISION" "standalone bundle must not enable igris supervision"
+
+  unset -f run_vortex_installer
+}
+
+test_unified_install_hook_enables_igris_supervision() {
+  local tmp contents
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' RETURN
+
+  run_vortex_installer() {
+    local installer_url="$1"
+    shift
+
+    {
+      printf 'URL=%s\n' "$installer_url"
+      printf '%s\n' "$@"
+    } > "$tmp"
+  }
+
+  IGRIS_MANAGE_VORTEX_SUPERVISION="false"
+  IGRIS_SUPERVISED_VORTEX_BINARY=""
+  GATEWAY_URL=https://gateway.example.com \
+  TOKEN=hsk_test \
+  INSTALL_VORTEX=true \
+  VORTEX_INSTALLER_URL=https://get.pipeops.dev/vortex.sh \
+    install_bundled_vortex_if_needed >/dev/null
+
+  contents="$(cat "$tmp")"
+  assert_contains_line "$contents" "URL=https://get.pipeops.dev/vortex.sh" "installer url"
+  assert_contains_line "$contents" "VORTEX_BINARY_ONLY=true" "binary-only env"
+  assert_contains_line "$contents" "VORTEX_INSTALL_SERVICE=false" "no-service env"
+  if grep -Eq '^VORTEX_(GATEWAY_URL|BOOTSTRAP_TOKEN|WORKSPACE_ID)=' <<< "$contents"; then
+    fail "unified bundle must not hand enrollment credentials to the vortex installer"
+  fi
+  assert_eq "true" "$IGRIS_MANAGE_VORTEX_SUPERVISION" "unified bundle enables igris supervision"
+  assert_eq "" "$IGRIS_SUPERVISED_VORTEX_BINARY" "default install dir needs no IGRIS_VORTEX_BINARY override"
+
+  IGRIS_MANAGE_VORTEX_SUPERVISION="false"
+  IGRIS_SUPERVISED_VORTEX_BINARY=""
+  GATEWAY_URL=https://gateway.example.com \
+  TOKEN=hsk_test \
+  INSTALL_VORTEX=true \
+  VORTEX_INSTALL_DIR=/opt/aeon/bin \
+    install_bundled_vortex_if_needed >/dev/null
+  assert_eq "/opt/aeon/bin/vortex" "$IGRIS_SUPERVISED_VORTEX_BINARY" "custom install dir records supervised binary path"
+
+  IGRIS_MANAGE_VORTEX_SUPERVISION="false"
+  IGRIS_SUPERVISED_VORTEX_BINARY=""
+  unset -f run_vortex_installer
+}
+
+test_unified_failure_does_not_enable_supervision() {
+  run_vortex_installer() {
+    return 1
+  }
+
+  IGRIS_MANAGE_VORTEX_SUPERVISION="false"
+  GATEWAY_URL=https://gateway.example.com \
+  TOKEN=hsk_test \
+  INSTALL_VORTEX=true \
+    install_bundled_vortex_if_needed >/dev/null 2>&1
+
+  assert_eq "false" "$IGRIS_MANAGE_VORTEX_SUPERVISION" "failed unified install must not enable supervision"
+
+  unset -f run_vortex_installer
+}
+
+test_agent_env_file_carries_vortex_supervision() {
+  local tmp contents
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  sudo() {
+    "$@"
+  }
+
+  IGRIS_MANAGE_VORTEX_SUPERVISION="true"
+  IGRIS_SUPERVISED_VORTEX_BINARY="/opt/aeon/bin/vortex"
+  write_agent_env_file "$tmp/unified.env" "https://gateway.example.com" "hsk_test" "workspace-1" "" "" "host" >/dev/null
+  contents="$(cat "$tmp/unified.env")"
+  assert_contains_line "$contents" "IGRIS_MANAGE_VORTEX=true" "unified env file enables supervision"
+  assert_contains_line "$contents" "IGRIS_VORTEX_BINARY=/opt/aeon/bin/vortex" "unified env file pins custom vortex binary"
+
+  IGRIS_MANAGE_VORTEX_SUPERVISION="true"
+  IGRIS_SUPERVISED_VORTEX_BINARY=""
+  write_agent_env_file "$tmp/unified-default.env" "https://gateway.example.com" "hsk_test" "workspace-1" "" "" "host" >/dev/null
+  contents="$(cat "$tmp/unified-default.env")"
+  assert_contains_line "$contents" "IGRIS_MANAGE_VORTEX=true" "unified env file enables supervision (default binary)"
+  if grep -q '^IGRIS_VORTEX_BINARY=' "$tmp/unified-default.env"; then
+    fail "default vortex install dir must not write IGRIS_VORTEX_BINARY"
+  fi
+
+  IGRIS_MANAGE_VORTEX_SUPERVISION="false"
+  IGRIS_SUPERVISED_VORTEX_BINARY=""
+  write_agent_env_file "$tmp/plain.env" "https://gateway.example.com" "hsk_test" "workspace-1" "" "" "host" >/dev/null
+  if grep -q 'IGRIS_MANAGE_VORTEX\|IGRIS_VORTEX_BINARY' "$tmp/plain.env"; then
+    fail "supervision keys must not leak into env files without a unified bundle"
+  fi
+
+  unset -f sudo
 }
 
 test_skips_vortex_by_default_for_linux_host_bootstrap
 test_installs_vortex_when_explicitly_enabled
+test_installs_vortex_standalone_mode
+test_resolve_vortex_bundle_mode
 test_skips_vortex_for_non_host_modes
 test_skips_vortex_when_disabled
 test_skips_vortex_for_legacy_auto_setting
 test_skips_vortex_for_unsupported_setting
-test_skips_vortex_without_workspace
+test_skips_standalone_vortex_without_workspace
+test_unified_vortex_does_not_require_workspace
+test_skips_unified_vortex_on_non_linux
 test_builds_vortex_env_from_igris_context
+test_builds_binary_only_env_for_unified_bundle
 test_vortex_installer_host_allowlist
 test_vortex_installer_security_gate_checks
 test_vortex_installer_checksum_validation
-test_install_hook_invokes_vortex_installer
+test_standalone_install_hook_invokes_vortex_installer
+test_unified_install_hook_enables_igris_supervision
+test_unified_failure_does_not_enable_supervision
+test_agent_env_file_carries_vortex_supervision
+
+test_unified_install_migrates_standalone_vortex_service() {
+  # The migration helper must exist AND be invoked from the unified install path,
+  # so upgrading a host that previously ran the standalone bundle tears down the
+  # legacy vortex.service instead of leaving two agents running.
+  declare -F migrate_standalone_vortex_service >/dev/null \
+    || fail "migrate_standalone_vortex_service must be defined"
+  declare -f install_bundled_vortex_if_needed | grep -q migrate_standalone_vortex_service \
+    || fail "unified install path must invoke migrate_standalone_vortex_service"
+}
+test_unified_install_migrates_standalone_vortex_service
 
 echo "ok"

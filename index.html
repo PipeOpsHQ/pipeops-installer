@@ -25,9 +25,12 @@
         <p>Install with auto-enrollment (Linux systemd service):</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | \
   GATEWAY_URL=https://gateway.example.com TOKEN=xxx WORKSPACE_ID=workspace-uuid bash</code></pre>
-        <p>Optionally include the Vortex network agent:</p>
+        <p>Optionally include the Vortex network agent (unified: supervised by Igris, one agent identity):</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | \
-  GATEWAY_URL=https://gateway.example.com TOKEN=xxx WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=true bash</code></pre>
+  GATEWAY_URL=https://gateway.example.com TOKEN=xxx INSTALL_VORTEX=true bash</code></pre>
+        <p>Or as a separate standalone Vortex agent (legacy):</p>
+        <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | \
+  GATEWAY_URL=https://gateway.example.com TOKEN=xxx WORKSPACE_ID=workspace-uuid INSTALL_VORTEX=standalone bash</code></pre>
         <p>Pin a specific version:</p>
         <pre><code>curl -fsSL https://get.pipeops.dev/igris.sh | IGRIS_VERSION=1.6.3 bash</code></pre>
       </div>
