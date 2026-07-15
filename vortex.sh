@@ -18,6 +18,12 @@
 #   VORTEX_IPS_MODE        - true/false (default: false)
 #   VORTEX_METRICS_PORT    - Prometheus metrics port, 0 disables (default: 9090)
 #   VORTEX_INSTALL_SERVICE - true/false, force service install without enrollment env
+#   VORTEX_BINARY_ONLY     - true/false, install the binary + eBPF payload only:
+#                            no service user, no systemd unit, no enrollment
+#                            config, no registration. Used by igris.sh unified
+#                            bundles where the Igris agent supervises Vortex
+#                            (IGRIS_MANAGE_VORTEX=true) so both engines report
+#                            as ONE agent. Overrides VORTEX_INSTALL_SERVICE.
 #
 
 set -Eeuo pipefail
@@ -178,6 +184,10 @@ resolve_iface() {
 
   iface="$(default_iface)"
   printf '%s' "${iface:-eth0}"
+}
+
+binary_only_install() {
+  truthy "${VORTEX_BINARY_ONLY:-}"
 }
 
 has_vortex_enrollment_env() {
@@ -825,6 +835,14 @@ install_service_if_requested() {
   local metrics_port
   local missing
 
+  if binary_only_install; then
+    if truthy "${VORTEX_INSTALL_SERVICE:-}"; then
+      warn "VORTEX_BINARY_ONLY=true overrides VORTEX_INSTALL_SERVICE; skipping service setup."
+    fi
+    info "Binary-only install requested; skipping service user, systemd unit, and enrollment configuration."
+    return 0
+  fi
+
   should_install_service || return
 
   if has_vortex_enrollment_env; then
@@ -864,6 +882,12 @@ print_success_message() {
   echo
   echo "Vortex installed successfully!"
   echo
+  if binary_only_install; then
+    echo "Binary-only install: no vortex service or enrollment was configured."
+    echo "The Igris agent supervises this binary when IGRIS_MANAGE_VORTEX=true,"
+    echo "so host and network telemetry report as ONE agent."
+    return
+  fi
   echo "Quick Start:"
   echo "  sudo ${INSTALL_DIR}/${BINARY_NAME} --iface $(resolve_iface)"
   echo

@@ -236,6 +236,50 @@ test_validate_tar_entries_rejects_traversal_paths() {
   unset -f tar
 }
 
+test_binary_only_install_flag() {
+  if binary_only_install; then
+    fail "binary_only_install should be off by default"
+  fi
+
+  if ! (VORTEX_BINARY_ONLY=true binary_only_install); then
+    fail "binary_only_install should honor VORTEX_BINARY_ONLY=true"
+  fi
+
+  if (VORTEX_BINARY_ONLY=false binary_only_install); then
+    fail "binary_only_install should stay off for VORTEX_BINARY_ONLY=false"
+  fi
+}
+
+test_binary_only_skips_service_and_enrollment() {
+  local recorded
+  recorded="$(mktemp)"
+  trap 'rm -f "$recorded"' RETURN
+
+  write_config_file() {
+    printf 'write_config_file\n' >> "$recorded"
+  }
+
+  create_systemd_service() {
+    printf 'create_systemd_service\n' >> "$recorded"
+  }
+
+  # Even with a full enrollment env AND a forced service install, binary-only
+  # mode must not write config, create a service user, or install a unit.
+  VORTEX_BINARY_ONLY=true \
+  VORTEX_INSTALL_SERVICE=true \
+  VORTEX_GATEWAY_URL=https://gateway.example.com \
+  VORTEX_BOOTSTRAP_TOKEN=hsk_test \
+  VORTEX_WORKSPACE_ID=workspace-1 \
+    install_service_if_requested >/dev/null 2>&1
+
+  if [[ -s "$recorded" ]]; then
+    fail "binary-only install must skip config + service setup, got: $(cat "$recorded")"
+  fi
+
+  unset -f write_config_file
+  unset -f create_systemd_service
+}
+
 test_has_vortex_enrollment_env() {
   unset VORTEX_GATEWAY_URL VORTEX_BOOTSTRAP_TOKEN VORTEX_TOKEN VORTEX_WORKSPACE_ID VORTEX_TENANT_ID VORTEX_ORG_ID
   if has_vortex_enrollment_env; then
@@ -271,6 +315,8 @@ test_validate_tar_entries_rejects_symlink
 test_validate_tar_entries_rejects_absolute_paths
 test_validate_tar_entries_rejects_traversal_paths
 test_validate_metrics_port
+test_binary_only_install_flag
+test_binary_only_skips_service_and_enrollment
 test_has_vortex_enrollment_env
 
 echo "ok"
