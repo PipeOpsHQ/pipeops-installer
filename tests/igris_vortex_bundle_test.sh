@@ -470,4 +470,15 @@ test_unified_install_hook_enables_igris_supervision
 test_unified_failure_does_not_enable_supervision
 test_agent_env_file_carries_vortex_supervision
 
+test_unified_install_migrates_standalone_vortex_service() {
+  # The migration helper must exist AND be invoked from the unified install path,
+  # so upgrading a host that previously ran the standalone bundle tears down the
+  # legacy vortex.service instead of leaving two agents running.
+  declare -F migrate_standalone_vortex_service >/dev/null \
+    || fail "migrate_standalone_vortex_service must be defined"
+  declare -f install_bundled_vortex_if_needed | grep -q migrate_standalone_vortex_service \
+    || fail "unified install path must invoke migrate_standalone_vortex_service"
+}
+test_unified_install_migrates_standalone_vortex_service
+
 echo "ok"

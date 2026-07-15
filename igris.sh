@@ -609,6 +609,13 @@ install_bundled_vortex_if_needed() {
     installer_url="$(vortex_installer_url)"
 
     if [[ "$bundle_mode" == "unified" ]]; then
+        # Migration: a host previously installed with the old standalone bundle has
+        # its own vortex.service (separate identity, separate heartbeat). Tear that
+        # service down before the unified install, otherwise Igris would supervise
+        # the Vortex binary WHILE the legacy service keeps running — the exact
+        # two-agents state this unified mode exists to remove.
+        migrate_standalone_vortex_service
+
         while IFS= read -r env_line; do
             [[ -n "$env_line" ]] && env_args+=("$env_line")
         done < <(build_vortex_binary_only_env_lines)
@@ -1260,6 +1267,25 @@ uninstall_igris_launchd() {
     if command -v launchctl >/dev/null 2>&1; then
         sudo launchctl bootout system "$plist_file" || true
     fi
+}
+
+# migrate_standalone_vortex_service removes a pre-existing STANDALONE vortex
+# systemd service before a unified install, so a host upgraded from the old
+# two-agent bundle doesn't keep the legacy Vortex daemon running (and
+# heartbeating as a second agent) alongside the Igris-supervised Vortex binary.
+# Only the standalone unit is removed — the vortex binary is left in place for
+# Igris to supervise. Idempotent: a no-op when no standalone service exists.
+migrate_standalone_vortex_service() {
+    [[ -f /etc/systemd/system/vortex.service ]] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+
+    info "Detected a standalone Vortex service from a prior install; removing it so Igris supervises Vortex as a single agent..."
+    sudo systemctl stop vortex 2>/dev/null || true
+    sudo systemctl disable vortex 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/vortex.service
+    sudo systemctl daemon-reload 2>/dev/null || true
+    sudo systemctl reset-failed vortex 2>/dev/null || true
+    success "Removed legacy standalone Vortex service; Vortex is now supervised by Igris."
 }
 
 uninstall_bundled_vortex() {
